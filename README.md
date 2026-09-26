@@ -13,15 +13,10 @@ A powerful, plug-and-play command-line utility for streamlining Zephyr RTOS proj
 
 ## Installation
 
-Download the script and make it executable:
+Download the script directly into your local binary folder and make it executable:
 ```bash
-wget -O zephyrproject https://raw.githubusercontent.com/emirarkali/Zephyr-Project-Manager/main/zephyrproject
-chmod +x zephyrproject
-```
-
-Then, move it to a directory in your PATH (e.g., `~/.local/bin/`):
-```bash
-mv zephyrproject ~/.local/bin/
+wget -O ~/.local/bin/zephyrproject https://raw.githubusercontent.com/emirarkali/Zephyr-Project-Manager/main/zephyrproject
+chmod +x ~/.local/bin/zephyrproject
 ```
 
 ### Install Auto-Completion (Recommended)
