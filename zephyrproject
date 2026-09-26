@@ -84,9 +84,9 @@ Zephyr Project Helper
 
 Usage:
 
-  zephyrproject -newproject "project-name" ["sample/path"]
-      Creates a new Zephyr project. If a sample path is provided, it copies
-      the source files from $ZEPHYR_WORKSPACE/zephyr/samples/<path>.
+  zephyrproject -newproject "project-name" [-sample]
+      Creates a new Zephyr project. If -sample is provided, you can interactively
+      select and copy one of the basic sample projects.
       Otherwise, it creates a minimal project from scratch.
       Board selection is interactive.
       If board is not selected, board.txt is left empty and no build is performed.
@@ -559,25 +559,79 @@ create_new_project()
         exit 1
     fi
 
+    local selected_sample=""
+    if [[ "$sample_path" == "-sample" ]]; then
+        echo
+        echo "------------------------------------------------------------"
+        echo "Sample Selection"
+        echo "------------------------------------------------------------"
+        echo
+        echo "Select a sample project to copy:"
+        echo
+        echo "  1) hello_world"
+        echo "  2) blinky"
+        echo "  3) button"
+        echo "  4) fade_led"
+        echo "  5) philosophers"
+        echo "  q) Quit / No sample (minimal project)"
+        echo
+        while true; do
+            question "Select [1-5 or q]: "
+            read -r sample_choice
+            case "$sample_choice" in
+                1) selected_sample="basic/hello_world"; break ;;
+                2) selected_sample="basic/blinky"; break ;;
+                3) selected_sample="basic/button"; break ;;
+                4) selected_sample="basic/fade_led"; break ;;
+                5) selected_sample="philosophers"; break ;;
+                q|Q) selected_sample=""; break ;;
+                *) warning "Invalid choice. Enter 1-5 or q." ;;
+            esac
+        done
+    elif [[ -n "$sample_path" ]]; then
+        # Backwards compatibility or direct path
+        selected_sample="$sample_path"
+    fi
+
     # West is required for board check
     activate_venv
 
     info "Creating new Zephyr project..."
     info "Target: $destination"
 
-    # --------------------------------------------------------
-    # Folders
-    # --------------------------------------------------------
+    if [[ -n "$selected_sample" ]]; then
+        local sample_dir="$ZEPHYR_WORKSPACE/zephyr/samples/$selected_sample"
+        if [[ ! -d "$sample_dir" ]]; then
+            error "Sample folder not found: $sample_dir"
+            exit 1
+        fi
+        
+        info "Copying sample: $selected_sample"
+        mkdir -p "$destination"
+        cp -a "$sample_dir/." "$destination/"
+        
+        mkdir -p "$destination/boards"
+        mkdir -p "$destination/.vscode"
+        
+        rm -rf -- "$destination/build"
+        
+        update_cmake_project_name "$destination/CMakeLists.txt" "$project_name"
+        
+        : > "$destination/board.txt"
+    else
+        # --------------------------------------------------------
+        # Folders
+        # --------------------------------------------------------
 
-    mkdir -p "$destination/src"
-    mkdir -p "$destination/boards"
-    mkdir -p "$destination/.vscode"
+        mkdir -p "$destination/src"
+        mkdir -p "$destination/boards"
+        mkdir -p "$destination/.vscode"
 
-    # --------------------------------------------------------
-    # CMakeLists.txt
-    # --------------------------------------------------------
+        # --------------------------------------------------------
+        # CMakeLists.txt
+        # --------------------------------------------------------
 
-    cat > "$destination/CMakeLists.txt" <<EOF
+        cat > "$destination/CMakeLists.txt" <<EOF
 cmake_minimum_required(VERSION 3.20.0)
 
 find_package(Zephyr REQUIRED HINTS \$ENV{ZEPHYR_BASE})
@@ -589,11 +643,11 @@ target_sources(app PRIVATE
 )
 EOF
 
-    # --------------------------------------------------------
-    # prj.conf
-    # --------------------------------------------------------
+        # --------------------------------------------------------
+        # prj.conf
+        # --------------------------------------------------------
 
-    cat > "$destination/prj.conf" <<'EOF'
+        cat > "$destination/prj.conf" <<'EOF'
 # ============================================================
 # Zephyr Project Configuration
 # ============================================================
@@ -616,11 +670,11 @@ CONFIG_MAIN_STACK_SIZE=2048
 # ------------------------------------------------------------
 EOF
 
-    # --------------------------------------------------------
-    # app.overlay
-    # --------------------------------------------------------
+        # --------------------------------------------------------
+        # app.overlay
+        # --------------------------------------------------------
 
-    cat > "$destination/app.overlay" <<'EOF'
+        cat > "$destination/app.overlay" <<'EOF'
 /*
  * Zephyr Devicetree Overlay
  *
@@ -628,19 +682,19 @@ EOF
  */
 EOF
 
-    # --------------------------------------------------------
-    # board.txt
-    #
-    # MUST be created from scratch in every new project.
-    # --------------------------------------------------------
+        # --------------------------------------------------------
+        # board.txt
+        #
+        # MUST be created from scratch in every new project.
+        # --------------------------------------------------------
 
-    : > "$destination/board.txt"
+        : > "$destination/board.txt"
 
-    # --------------------------------------------------------
-    # main.c
-    # --------------------------------------------------------
+        # --------------------------------------------------------
+        # main.c
+        # --------------------------------------------------------
 
-    cat > "$destination/src/main.c" <<'EOF'
+        cat > "$destination/src/main.c" <<'EOF'
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 
@@ -660,6 +714,7 @@ int main(void)
     return 0;
 }
 EOF
+    fi
 
     # --------------------------------------------------------
     # .gitignore
@@ -1347,17 +1402,17 @@ case "$ACTION" in
 
     -newproject)
 
-        if [[ $# -ne 2 ]]; then
+        if [[ $# -lt 2 || $# -gt 3 ]]; then
 
-            error "Exactly one project name must be provided for a new project."
+            error "Invalid arguments for new project."
             error
             error 'Example:'
-            error 'zephyrproject -newproject "uart_test"'
+            error 'zephyrproject -newproject "uart_test" [-sample]'
 
             exit 1
         fi
 
-        create_new_project "$2"
+        create_new_project "$2" "${3:-}"
         ;;
 
     # --------------------------------------------------------
