@@ -1,0 +1,1701 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+# ============================================================
+# Zephyr Project Helper
+# ============================================================
+
+# ------------------------------------------------------------
+# Settings
+# ------------------------------------------------------------
+
+ZEPHYR_WORKSPACE="${ZEPHYR_WORKSPACE:-$HOME/zephyrproject}"
+APPLICATIONS_DIR="${ZEPHYR_APPLICATIONS_DIR:-$ZEPHYR_WORKSPACE/applications}"
+ZEPHYR_VENV="${ZEPHYR_VENV:-$ZEPHYR_WORKSPACE/.venv}"
+
+BUILD_DIR="${ZEPHYR_BUILD_DIR:-build}"
+
+PROJECT_DIR="$PWD"
+
+# ------------------------------------------------------------
+# Colors
+# ------------------------------------------------------------
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+info()
+{
+    echo -e "${BLUE}[INFO]${NC} $*"
+}
+
+success()
+{
+    echo -e "${GREEN}[OK]${NC} $*"
+}
+
+warning()
+{
+    echo -e "${YELLOW}[WARNING]${NC} $*"
+}
+
+error()
+{
+    echo -e "${RED}[ERROR]${NC} $*" >&2
+}
+
+question()
+{
+    echo -en "${CYAN}[?]${NC} $*"
+}
+
+# ------------------------------------------------------------
+# Error handling
+# ------------------------------------------------------------
+
+on_error()
+{
+    local exit_code=$?
+    local line_number=$1
+
+    error "Operation failed."
+    error "Line: $line_number"
+    error "Exit code: $exit_code"
+
+    exit "$exit_code"
+}
+
+trap 'on_error $LINENO' ERR
+
+# ------------------------------------------------------------
+# Help
+# ------------------------------------------------------------
+
+show_help()
+{
+    cat <<'EOF'
+
+Zephyr Project Helper
+
+Usage:
+
+  zephyrproject -newproject "project-name"
+      Creates a new minimal Zephyr project from scratch.
+      Board selection is interactive.
+      If board is not selected, board.txt is left empty and no build is performed.
+
+  zephyrproject -copy "source-project" "new-project"
+      Copies an existing project.
+      build/ folder is removed from the copy.
+      Board can be kept, changed or left empty.
+
+  zephyrproject -openproject "project-name"
+      Opens the project in Applications with VS Code.
+      Performs a clean build if board exists.
+
+  zephyrproject -install-completion
+      Installs bash tab auto-completion for this script.
+
+  zephyrproject -delete "project-name"
+      Deletes the specified project from the Applications folder.
+
+  zephyrproject -show
+      Lists projects in the Applications directory.
+
+  zephyrproject -build
+      Performs a normal build.
+
+  zephyrproject -clean
+      Performs a pristine build.
+
+  zephyrproject -flash
+      Builds and flashes to the board.
+
+  zephyrproject -clean-flash
+      Performs pristine build and flashes to the board.
+
+  zephyrproject -flash-only
+      Flashes existing build output.
+
+  zephyrproject -debug
+      Builds and starts GDB debug.
+
+  zephyrproject -debugserver
+      Builds and starts OpenOCD GDB server.
+
+  zephyrproject -menuconfig
+      Opens the Zephyr menuconfig interface.
+
+  zephyrproject -pristine
+      Completely deletes the build folder.
+
+  zephyrproject -status
+      Shows project, board, and tool status.
+
+  zephyrproject -help
+      Shows this help screen.
+
+
+Example:
+
+  zephyrproject -newproject uart_test
+
+  zephyrproject -copy uart_test uart_test_v2
+
+  zephyrproject -build
+
+  zephyrproject -flash
+
+  zephyrproject -clean-flash
+
+EOF
+}
+
+# ------------------------------------------------------------
+# General checks
+# ------------------------------------------------------------
+
+check_command()
+{
+    local command_name="$1"
+
+    if ! command -v "$command_name" >/dev/null 2>&1; then
+        error "Required command not found: $command_name"
+        exit 1
+    fi
+}
+
+
+sync_launch_json()
+{
+    if [[ -f "$PROJECT_DIR/.vscode/launch.json" ]]; then
+        local b="$(get_board)"
+        if [[ -n "$b" ]]; then
+            sed -i "s/"device": ".*"/"device": "$b"/" "$PROJECT_DIR/.vscode/launch.json"
+        fi
+    fi
+}
+
+check_project()
+{
+    if [[ ! -f "$PROJECT_DIR/CMakeLists.txt" ]]; then
+        error "CMakeLists.txt not found in this folder:"
+        error "$PROJECT_DIR"
+        error "Run the command in the Zephyr application root folder."
+        exit 1
+    fi
+
+    if [[ ! -d "$PROJECT_DIR/src" ]]; then
+        error "src folder not found:"
+        error "$PROJECT_DIR/src"
+        exit 1
+    fi
+
+    if [[ ! -f "$PROJECT_DIR/src/main.c" ]]; then
+        warning "src/main.c not found."
+    fi
+
+    if [[ ! -f "$PROJECT_DIR/prj.conf" ]]; then
+        warning "prj.conf not found."
+    fi
+
+    if [[ ! -f "$PROJECT_DIR/board.txt" ]]; then
+        warning "board.txt not found."
+    fi
+
+    sync_launch_json
+}
+
+# ------------------------------------------------------------
+# Zephyr virtual environment
+# ------------------------------------------------------------
+
+activate_venv()
+{
+    if [[ ! -f "$ZEPHYR_VENV/bin/activate" ]]; then
+        error "Zephyr virtual environment not found:"
+        error "$ZEPHYR_VENV/bin/activate"
+        exit 1
+    fi
+
+    # shellcheck disable=SC1090
+    source "$ZEPHYR_VENV/bin/activate"
+
+    if ! command -v west >/dev/null 2>&1; then
+        error "Virtual environment activated but west not found."
+        exit 1
+    fi
+}
+
+# ============================================================
+# BOARD MANAGEMENT
+# ============================================================
+
+# ------------------------------------------------------------
+# Read board.txt
+# ------------------------------------------------------------
+
+get_board()
+{
+    if [[ -f "$PROJECT_DIR/board.txt" ]]; then
+        tr -d '[:space:]' < "$PROJECT_DIR/board.txt"
+    else
+        echo ""
+    fi
+}
+
+# ------------------------------------------------------------
+# Write board to board.txt
+# ------------------------------------------------------------
+
+write_board()
+{
+    local project="$1"
+    local board="$2"
+
+    printf '%s\n' "$board" > "$project/board.txt"
+}
+
+# ------------------------------------------------------------
+# Is board known by Zephyr?
+# ------------------------------------------------------------
+
+board_exists()
+{
+    local board="$1"
+
+    [[ -n "$board" ]] || return 1
+
+    west boards -f "{name}" 2>/dev/null |
+        sed '/^[[:space:]]*$/d' |
+        grep -Fx -- "$board" >/dev/null
+}
+
+# ------------------------------------------------------------
+# Show similar board names
+# ------------------------------------------------------------
+
+show_similar_boards()
+{
+    local board="$1"
+
+    echo
+    info "Similar Zephyr board names:"
+
+    west boards -f "{name}" 2>/dev/null |
+        grep -i -- "$board" |
+        head -n 10 || true
+
+    echo
+}
+
+# ------------------------------------------------------------
+# Select board for new project
+# ------------------------------------------------------------
+
+select_board_for_new_project()
+{
+    local destination="$1"
+    local board=""
+
+    echo
+    echo "------------------------------------------------------------"
+    echo "Board Selection"
+    echo "------------------------------------------------------------"
+    echo
+    echo "Enter Zephyr board name."
+    echo
+    echo "Example:"
+    echo "  nucleo_f303re"
+    echo "  nucleo_f303k8"
+    echo
+    echo "To configure the board manually later:"
+    echo "  q"
+    echo
+
+    while true; do
+
+        question "Board: "
+        read -r board
+
+        board="${board//[[:space:]]/}"
+
+        if [[ "$board" == "q" || "$board" == "Q" ]]; then
+
+            : > "$destination/board.txt"
+
+            warning "Board selection skipped."
+            warning "board.txt left empty."
+
+            return 0
+        fi
+
+        if [[ -z "$board" ]]; then
+            warning "Board name cannot be empty."
+            warning "Type q to skip and configure manually."
+            continue
+        fi
+
+        info "Checking board in Zephyr list..."
+
+        if board_exists "$board"; then
+
+            write_board "$destination" "$board"
+
+            success "Board found: $board"
+            return 0
+
+        else
+
+            error "This board was not found in Zephyr:"
+            error "$board"
+
+            show_similar_boards "$board"
+
+            warning "Enter board name again or type q for manual configuration."
+        fi
+    done
+}
+
+# ------------------------------------------------------------
+# Select board for copied project
+# ------------------------------------------------------------
+
+select_board_for_copied_project()
+{
+    local destination="$1"
+    local old_board=""
+    local board=""
+
+    if [[ -f "$destination/board.txt" ]]; then
+        old_board="$(tr -d '[:space:]' < "$destination/board.txt")"
+    fi
+
+    echo
+    echo "------------------------------------------------------------"
+    echo "Board Selection"
+    echo "------------------------------------------------------------"
+    echo
+
+    if [[ -n "$old_board" ]]; then
+        echo "Board in source project:"
+        echo
+        echo "  $old_board"
+        echo
+    else
+        echo "No board selected in source project."
+        echo
+    fi
+
+    echo "Options:"
+    echo
+    echo "  k            Keep the old board"
+    echo "  q            Leave board.txt empty"
+    echo "  <board name>  Select a new Zephyr board"
+    echo
+
+    while true; do
+
+        question "Board Selection: "
+        read -r board
+
+        board="${board//[[:space:]]/}"
+
+        # ----------------------------------------------------
+        # Keep old board
+        # ----------------------------------------------------
+
+        if [[ "$board" == "k" || "$board" == "K" ]]; then
+
+            if [[ -z "$old_board" ]]; then
+                warning "No board to keep in source project."
+                continue
+            fi
+
+            success "Keeping board: $old_board"
+            return 0
+        fi
+
+        # ----------------------------------------------------
+        # Leave board empty
+        # ----------------------------------------------------
+
+        if [[ "$board" == "q" || "$board" == "Q" ]]; then
+
+            : > "$destination/board.txt"
+
+            warning "board.txt left empty."
+            return 0
+        fi
+
+        # ----------------------------------------------------
+        # Empty input
+        # ----------------------------------------------------
+
+        if [[ -z "$board" ]]; then
+            warning "Enter a board name, k or q."
+            continue
+        fi
+
+        # ----------------------------------------------------
+        # Verify new Zephyr board
+        # ----------------------------------------------------
+
+        info "Checking board in Zephyr list..."
+
+        if board_exists "$board"; then
+
+            write_board "$destination" "$board"
+
+            success "New board selected: $board"
+            return 0
+
+        else
+
+            error "This board was not found in Zephyr:"
+            error "$board"
+
+            show_similar_boards "$board"
+
+            warning "Try again."
+        fi
+    done
+}
+
+# ============================================================
+# PROJECT NAME
+# ============================================================
+
+validate_project_name()
+{
+    local LC_ALL=C
+    local project_name="$1"
+
+    if [[ -z "$project_name" ]]; then
+        error "Project name not specified."
+        exit 1
+    fi
+
+    if [[ "$project_name" == "." || "$project_name" == ".." ]]; then
+        error "Invalid project name: $project_name"
+        exit 1
+    fi
+
+    if [[ "$project_name" == */* ]]; then
+        error "Project name cannot contain folder paths."
+        error "Enter only the project name."
+        exit 1
+    fi
+
+    if [[ ! "$project_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]]; then
+        error "Invalid project name:"
+        error "$project_name"
+        error "Only letters, numbers, underscores and hyphens are allowed."
+        exit 1
+    fi
+}
+
+# ------------------------------------------------------------
+# Change CMake project(...) name
+# ------------------------------------------------------------
+
+update_cmake_project_name()
+{
+    local cmake_file="$1"
+    local project_name="$2"
+    local cmake_project_name
+
+    cmake_project_name="${project_name//-/_}"
+
+    if grep -Eq '^[[:space:]]*project\(' "$cmake_file"; then
+
+        sed -i -E \
+            "s/^[[:space:]]*project\([^)]*\)/project($cmake_project_name)/" \
+            "$cmake_file"
+
+    else
+        warning "project(...) not found in CMakeLists.txt."
+    fi
+}
+
+# ============================================================
+# NEW PROJECT
+# ============================================================
+
+create_new_project()
+{
+    local project_name="$1"
+    local destination="$APPLICATIONS_DIR/$project_name"
+    local cmake_project_name="${project_name//-/_}"
+
+    validate_project_name "$project_name"
+
+    check_command mkdir
+    check_command cat
+
+    if [[ ! -d "$APPLICATIONS_DIR" ]]; then
+        error "Applications folder not found:"
+        error "$APPLICATIONS_DIR"
+        exit 1
+    fi
+
+    if [[ -e "$destination" ]]; then
+        error "A file or folder with this name already exists:"
+        error "$destination"
+        exit 1
+    fi
+
+    # West is required for board check
+    activate_venv
+
+    info "Creating new Zephyr project..."
+    info "Target: $destination"
+
+    # --------------------------------------------------------
+    # Folders
+    # --------------------------------------------------------
+
+    mkdir -p "$destination/src"
+    mkdir -p "$destination/boards"
+    mkdir -p "$destination/.vscode"
+
+    # --------------------------------------------------------
+    # CMakeLists.txt
+    # --------------------------------------------------------
+
+    cat > "$destination/CMakeLists.txt" <<EOF
+cmake_minimum_required(VERSION 3.20.0)
+
+find_package(Zephyr REQUIRED HINTS \$ENV{ZEPHYR_BASE})
+
+project($cmake_project_name)
+
+target_sources(app PRIVATE
+    src/main.c
+)
+EOF
+
+    # --------------------------------------------------------
+    # prj.conf
+    # --------------------------------------------------------
+
+    cat > "$destination/prj.conf" <<'EOF'
+# ============================================================
+# Zephyr Project Configuration
+# ============================================================
+
+# Console / printk
+CONFIG_PRINTK=y
+
+# Assertions
+CONFIG_ASSERT=y
+
+# Logging
+CONFIG_LOG=y
+CONFIG_LOG_DEFAULT_LEVEL=3
+
+# Main thread stack
+CONFIG_MAIN_STACK_SIZE=2048
+
+# ------------------------------------------------------------
+# Add project-specific configuration below
+# ------------------------------------------------------------
+EOF
+
+    # --------------------------------------------------------
+    # app.overlay
+    # --------------------------------------------------------
+
+    cat > "$destination/app.overlay" <<'EOF'
+/*
+ * Zephyr Devicetree Overlay
+ *
+ * Add project-specific devicetree configuration here.
+ */
+EOF
+
+    # --------------------------------------------------------
+    # board.txt
+    #
+    # MUST be created from scratch in every new project.
+    # --------------------------------------------------------
+
+    : > "$destination/board.txt"
+
+    # --------------------------------------------------------
+    # main.c
+    # --------------------------------------------------------
+
+    cat > "$destination/src/main.c" <<'EOF'
+#include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
+
+int main(void)
+{
+    printk("Zephyr application started.\n");
+
+    while (1) {
+
+        /*
+         * Application code
+         */
+
+        k_sleep(K_SECONDS(1));
+    }
+
+    return 0;
+}
+EOF
+
+    # --------------------------------------------------------
+    # .gitignore
+    # --------------------------------------------------------
+
+    cat > "$destination/.gitignore" <<'EOF'
+build/
+.vscode/*.log
+*.swp
+*~
+EOF
+
+    # ========================================================
+    # VS CODE TASKS
+    # ========================================================
+
+    cat > "$destination/.vscode/tasks.json" <<'EOF'
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Zephyr: Build",
+            "type": "shell",
+            "command": "zephyrproject",
+            "args": [
+                "-build"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "Zephyr: Clean Build",
+            "type": "shell",
+            "command": "zephyrproject",
+            "args": [
+                "-clean"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ]
+        },
+        {
+            "label": "Zephyr: Flash",
+            "type": "shell",
+            "command": "zephyrproject",
+            "args": [
+                "-flash-only"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Zephyr: Build and Flash",
+            "type": "shell",
+            "command": "zephyrproject",
+            "args": [
+                "-flash"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Zephyr: Clean Build and Flash",
+            "type": "shell",
+            "command": "zephyrproject",
+            "args": [
+                "-clean-flash"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Zephyr: Start OpenOCD Server",
+            "type": "shell",
+            "command": "zephyrproject",
+            "args": [
+                "-debugserver"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "isBackground": true,
+            "problemMatcher": {
+                "owner": "openocd",
+                "pattern": {
+                    "regexp": ".*"
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "Open On-Chip Debugger",
+                    "endsPattern": "Listening on port 3333 for gdb connections"
+                }
+            }
+        }
+    ]
+}
+EOF
+
+    # ========================================================
+    # VS CODE LAUNCH
+    # ========================================================
+
+    local DYNAMIC_GDB_PATH="\${env:HOME}/zephyr-sdk-1.0.1/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb"
+    if [[ -n "${ZEPHYR_SDK_INSTALL_DIR:-}" ]]; then
+        DYNAMIC_GDB_PATH="${ZEPHYR_SDK_INSTALL_DIR}/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb"
+    else
+        local found_sdk="$(ls -d $HOME/zephyr-sdk* 2>/dev/null | sort -rV | head -n 1)"
+        if [[ -n "$found_sdk" ]]; then
+            if [[ -f "$found_sdk/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb" ]]; then
+                DYNAMIC_GDB_PATH="$found_sdk/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb"
+            elif [[ -f "$found_sdk/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb" ]]; then
+                DYNAMIC_GDB_PATH="$found_sdk/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb"
+            fi
+        fi
+    fi
+
+    cat > "$destination/.vscode/launch.json" <<EOF
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Zephyr: Build and Debug",
+            "type": "cortex-debug",
+            "request": "launch",
+
+            "cwd": "\${workspaceFolder}",
+
+            "executable": "\${workspaceFolder}/build/zephyr/zephyr.elf",
+
+            "servertype": "external",
+            "gdbTarget": "localhost:3333",
+
+            "gdbPath": "${DYNAMIC_GDB_PATH}",
+
+            "preLaunchTask": "Zephyr: Start OpenOCD Server",
+
+            "runToEntryPoint": "main",
+
+            "device": "",
+            "interface": "swd",
+
+            "showDevDebugOutput": "raw"
+        }
+    ]
+}
+EOF
+
+    # --------------------------------------------------------
+    # PROJECT_INFO.md
+    # --------------------------------------------------------
+
+    cat > "$destination/PROJECT_INFO.md" <<EOF
+# $project_name
+
+Minimal Zephyr application.
+
+## Board
+
+Board configuration is stored in:
+
+\`\`\`text
+board.txt
+\`\`\`
+
+Example:
+
+\`\`\`text
+nucleo_f303re
+\`\`\`
+
+## Build
+
+\`\`\`bash
+zephyrproject -build
+\`\`\`
+
+## Clean Build
+
+\`\`\`bash
+zephyrproject -clean
+\`\`\`
+
+## Build and Flash
+
+\`\`\`bash
+zephyrproject -flash
+\`\`\`
+
+## Clean Build and Flash
+
+\`\`\`bash
+zephyrproject -clean-flash
+\`\`\`
+
+## Flash Only
+
+\`\`\`bash
+zephyrproject -flash-only
+\`\`\`
+
+## Debug
+
+\`\`\`bash
+zephyrproject -debug
+\`\`\`
+EOF
+
+    # --------------------------------------------------------
+    # Board Selection
+    # --------------------------------------------------------
+
+    select_board_for_new_project "$destination"
+
+    PROJECT_DIR="$destination"
+
+    sync_launch_json
+
+    success "Project files created."
+
+    echo
+    echo "Project:"
+    echo "  $destination"
+    echo
+
+    if [[ -n "$(get_board)" ]]; then
+        echo "Board:"
+        echo "  $(get_board)"
+    else
+        echo "Board:"
+        echo "  <not selected>"
+    fi
+
+    echo
+
+    # --------------------------------------------------------
+    # Open VS Code
+    # --------------------------------------------------------
+
+    if command -v code >/dev/null 2>&1; then
+
+        info "Opening new project in VS Code..."
+        code "$destination"
+
+    else
+
+        warning "VS Code 'code' command not found."
+        warning "Open manually:"
+        warning "code \"$destination\""
+    fi
+
+    # --------------------------------------------------------
+    # NO AUTOMATIC BUILD FOR NEW PROJECT
+    # --------------------------------------------------------
+
+    info "Automatic build skipped for new project."
+
+    if [[ -z "$(get_board)" ]]; then
+        warning "Fill board.txt before building."
+    fi
+
+    success "New project is ready."
+}
+
+# ============================================================
+# COPY PROJECT
+# ============================================================
+
+copy_existing_project()
+{
+    local src_name="$1"
+    local dst_name="$2"
+
+    local src_dir="$APPLICATIONS_DIR/$src_name"
+    local dst_dir="$APPLICATIONS_DIR/$dst_name"
+
+    validate_project_name "$dst_name"
+
+    check_command cp
+    check_command sed
+    check_command mkdir
+
+    if [[ ! -d "$src_dir" ]]; then
+        error "Source project not found:"
+        error "$src_dir"
+        exit 1
+    fi
+
+    if [[ -e "$dst_dir" ]]; then
+        error "A file or folder with this name already exists:"
+        error "$dst_dir"
+        exit 1
+    fi
+
+    activate_venv
+
+    info "Copying project..."
+    info "Source: $src_dir"
+    info "Target:  $dst_dir"
+
+    mkdir -p "$dst_dir"
+
+    # --------------------------------------------------------
+    # Copy all project files
+    # --------------------------------------------------------
+
+    shopt -s dotglob
+    cp -a "$src_dir/." "$dst_dir/"
+    shopt -u dotglob
+
+    # --------------------------------------------------------
+    # Remove old build output
+    # --------------------------------------------------------
+
+    if [[ -d "$dst_dir/$BUILD_DIR" ]]; then
+
+        info "Removing copied build folder..."
+
+        rm -rf -- "$dst_dir/$BUILD_DIR"
+    fi
+
+    # --------------------------------------------------------
+    # Change CMake project name
+    # --------------------------------------------------------
+
+    if [[ -f "$dst_dir/CMakeLists.txt" ]]; then
+
+        update_cmake_project_name \
+            "$dst_dir/CMakeLists.txt" \
+            "$dst_name"
+
+    else
+
+        warning "CMakeLists.txt not found:"
+        warning "$dst_dir/CMakeLists.txt"
+    fi
+
+    # --------------------------------------------------------
+    # Change PROJECT_INFO title
+    # --------------------------------------------------------
+
+    if [[ -f "$dst_dir/PROJECT_INFO.md" ]]; then
+        sed -i "1s/.*/# $dst_name/" "$dst_dir/PROJECT_INFO.md" || true
+    fi
+
+    # --------------------------------------------------------
+    # Ensure board.txt always exists
+    # --------------------------------------------------------
+
+    if [[ ! -f "$dst_dir/board.txt" ]]; then
+        : > "$dst_dir/board.txt"
+    fi
+
+    # --------------------------------------------------------
+    # Required base folders
+    # --------------------------------------------------------
+
+    mkdir -p "$dst_dir/boards"
+    mkdir -p "$dst_dir/.vscode"
+
+    # --------------------------------------------------------
+    # Board Selection
+    # --------------------------------------------------------
+
+    select_board_for_copied_project "$dst_dir"
+
+    PROJECT_DIR="$dst_dir"
+
+    sync_launch_json
+
+    success "Project copied."
+
+    # --------------------------------------------------------
+    # VS Code
+    # --------------------------------------------------------
+
+    if command -v code >/dev/null 2>&1; then
+
+        info "Opening copied project in VS Code..."
+        code "$dst_dir"
+
+    else
+
+        warning "VS Code 'code' command not found."
+        warning "Open manually:"
+        warning "code \"$dst_dir\""
+    fi
+
+    # --------------------------------------------------------
+    # Clean build if board exists
+    # --------------------------------------------------------
+
+    if [[ -n "$(get_board)" ]]; then
+
+        info "Performing clean build check for copied project..."
+
+        run_build clean
+
+        success "Copied project built."
+
+    else
+
+        warning "Build skipped because no board was selected."
+    fi
+
+    echo
+    echo "Project:"
+    echo "  $dst_dir"
+    echo
+}
+
+# ============================================================
+# OPENOCD
+# ============================================================
+
+stop_old_openocd()
+{
+    if pgrep -x openocd >/dev/null 2>&1; then
+
+        warning "Closing old OpenOCD process..."
+
+        pkill -x openocd || true
+        sleep 1
+    fi
+
+    if pgrep -f '[o]penocd.*interface/stlink' >/dev/null 2>&1; then
+
+        warning "Closing old OpenOCD process using ST-Link..."
+
+        pkill -f '[o]penocd.*interface/stlink' || true
+        sleep 1
+    fi
+}
+
+# ============================================================
+# BUILD CHECKS
+# ============================================================
+
+check_build_output()
+{
+    if [[ ! -f "$PROJECT_DIR/$BUILD_DIR/zephyr/zephyr.elf" ]]; then
+
+        error "Build output not found:"
+        error "$PROJECT_DIR/$BUILD_DIR/zephyr/zephyr.elf"
+        error "Perform build operation first."
+
+        exit 1
+    fi
+}
+
+check_debug_tools()
+{
+    if ! command -v openocd >/dev/null 2>&1; then
+
+        warning "OpenOCD not found in system PATH."
+        warning "West can use OpenOCD within the Zephyr SDK."
+    fi
+}
+
+# ============================================================
+# BUILD
+# ============================================================
+
+run_build()
+{
+    local pristine_mode="${1:-normal}"
+
+    local board
+    board="$(get_board)"
+
+    # --------------------------------------------------------
+    # Board required
+    # --------------------------------------------------------
+
+    if [[ -z "$board" ]]; then
+
+        error "Board not selected."
+        error
+        error "board.txt file is empty:"
+        error "$PROJECT_DIR/board.txt"
+        error
+        error "Example:"
+        error "echo 'nucleo_f303re' > board.txt"
+
+        exit 1
+    fi
+
+    # --------------------------------------------------------
+    # west build arguments
+    # --------------------------------------------------------
+
+    local args=(
+        west
+        build
+        --build-dir "$PROJECT_DIR/$BUILD_DIR"
+    )
+
+    if [[ "$pristine_mode" == "clean" ]]; then
+        args+=(-p always)
+    fi
+
+    args+=(
+        -b "$board"
+        "$PROJECT_DIR"
+    )
+
+    # --------------------------------------------------------
+    # Add BOARD_ROOT if custom boards exist
+    # --------------------------------------------------------
+
+    if [[ -d "$PROJECT_DIR/boards" ]] &&
+       [[ -n "$(find "$PROJECT_DIR/boards" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
+
+        info "Local boards/ content found."
+        info "BOARD_ROOT active."
+
+        args+=(
+            --
+            "-DBOARD_ROOT=$PROJECT_DIR"
+        )
+    fi
+
+    echo
+    info "Board        : $board"
+    info "Project        : $PROJECT_DIR"
+    info "Build directory: $PROJECT_DIR/$BUILD_DIR"
+    echo
+
+    "${args[@]}"
+
+    check_build_output
+
+    success "Build completed."
+}
+
+# ============================================================
+# FLASH
+# ============================================================
+
+run_flash()
+{
+    stop_old_openocd
+
+    check_build_output
+    check_debug_tools
+
+    info "Flashing board..."
+
+    west flash \
+        --build-dir "$PROJECT_DIR/$BUILD_DIR" \
+        -r openocd
+
+    success "Flash completed."
+}
+
+# ============================================================
+# DEBUG
+# ============================================================
+
+run_debug()
+{
+    stop_old_openocd
+
+    check_build_output
+    check_debug_tools
+
+    info "Starting console debug..."
+    info "To exit, type quit in GDB"
+
+    west debug \
+        --build-dir "$PROJECT_DIR/$BUILD_DIR" \
+        -r openocd
+}
+
+# ============================================================
+# DEBUG SERVER
+# ============================================================
+
+run_debugserver()
+{
+    stop_old_openocd
+
+    check_build_output
+    check_debug_tools
+
+    info "Starting OpenOCD debug server."
+    info "GDB: localhost:3333"
+    info "Ctrl+C to stop."
+
+    west debugserver \
+        --build-dir "$PROJECT_DIR/$BUILD_DIR" \
+        -r openocd
+}
+
+# ============================================================
+# STATUS
+# ============================================================
+
+show_status()
+{
+    echo
+    echo "============================================================"
+    echo "Zephyr Project Status"
+    echo "============================================================"
+    echo
+
+    echo "Project        : $PROJECT_DIR"
+    echo "Workspace      : $ZEPHYR_WORKSPACE"
+    echo "Applications   : $APPLICATIONS_DIR"
+    echo "Venv           : $ZEPHYR_VENV"
+    echo "Board          : $(get_board)"
+    echo "Build directory: $PROJECT_DIR/$BUILD_DIR"
+
+    echo
+
+    if [[ -f "$PROJECT_DIR/$BUILD_DIR/zephyr/zephyr.elf" ]]; then
+
+        success "zephyr.elf exists."
+
+        ls -lh "$PROJECT_DIR/$BUILD_DIR/zephyr/zephyr.elf"
+
+    else
+
+        warning "zephyr.elf not found."
+    fi
+
+    echo
+
+    if pgrep -a -f '[o]penocd' >/dev/null 2>&1; then
+
+        warning "Running OpenOCD process exists:"
+
+        pgrep -a -f '[o]penocd'
+
+    else
+
+        success "No running OpenOCD process."
+    fi
+
+    echo
+
+    west --version
+    cmake --version | head -n 1
+    ninja --version 2>/dev/null || true
+
+    echo
+}
+
+# ============================================================
+# MAIN PROGRAM
+# ============================================================
+
+ACTION="${1:--help}"
+
+case "$ACTION" in
+
+    # --------------------------------------------------------
+    # Help
+    # --------------------------------------------------------
+
+    -help|--help|-h)
+
+        show_help
+        ;;
+
+    # --------------------------------------------------------
+    # New Project
+    # --------------------------------------------------------
+
+    -newproject)
+
+        if [[ $# -ne 2 ]]; then
+
+            error "Exactly one project name must be provided for a new project."
+            error
+            error 'Example:'
+            error 'zephyrproject -newproject "uart_test"'
+
+            exit 1
+        fi
+
+        create_new_project "$2"
+        ;;
+
+    # --------------------------------------------------------
+    # Copy Project
+    # --------------------------------------------------------
+
+    -copy)
+
+        if [[ $# -ne 3 ]]; then
+
+            error "Source and target project names must be provided."
+            error
+            error 'Example:'
+            error 'zephyrproject -copy "uart_test" "uart_test_v2"'
+
+            exit 1
+        fi
+
+        copy_existing_project "$2" "$3"
+        ;;
+
+
+
+    # --------------------------------------------------------
+    # Install Completion
+    # --------------------------------------------------------
+
+    -install-completion)
+
+        COMP_FILE="$HOME/.zephyrproject-completion.bash"
+        cat <<'EOF_COMP' > "$COMP_FILE"
+_zephyrproject_completion() {
+    local cur prev words cword
+    
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    local commands="-newproject -copy -openproject -show -build -clean -flash -clean-flash -flash-only -debug -delete -install-completion -help"
+    
+    local apps_dir="${ZEPHYR_APPLICATIONS_DIR:-${ZEPHYR_WORKSPACE:-$HOME/zephyrproject}/applications}"
+
+    if [[ ${COMP_CWORD} -eq 1 ]]; then
+        COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
+        return 0
+    fi
+
+    case "$prev" in
+        -openproject|-delete|-copy)
+            if [[ -d "$apps_dir" ]]; then
+                local projects=$(find "$apps_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2>/dev/null)
+                COMPREPLY=( $(compgen -W "$projects" -- "$cur") )
+            fi
+            return 0
+            ;;
+    esac
+
+    return 0
+}
+
+complete -F _zephyrproject_completion zephyrproject
+EOF_COMP
+
+        if ! grep -q "source ~/.zephyrproject-completion.bash" "$HOME/.bashrc"; then
+            echo -e "
+# Zephyrproject bash completion
+source ~/.zephyrproject-completion.bash
+" >> "$HOME/.bashrc"
+        fi
+
+        success "Bash completion installed successfully!"
+        warning "Please restart your terminal or run: source ~/.bashrc"
+        ;;
+
+    # --------------------------------------------------------
+    # Delete Project
+    # --------------------------------------------------------
+
+    -delete)
+
+        if [[ $# -ne 2 ]]; then
+            error "Project name to delete must be provided."
+            exit 1
+        fi
+
+        PROJECT_DIR="$APPLICATIONS_DIR/$2"
+
+        if [[ ! -d "$PROJECT_DIR" ]]; then
+            error "Project not found:"
+            error "$PROJECT_DIR"
+            exit 1
+        fi
+
+        warning "You are about to PERMANENTLY delete the project: $2"
+        question "Are you sure? [y/N]: "
+        read -r confirm
+        if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+            rm -rf -- "$PROJECT_DIR"
+            success "Project deleted: $2"
+        else
+            info "Deletion cancelled."
+        fi
+        ;;
+
+    # --------------------------------------------------------
+    # Open Project
+    # --------------------------------------------------------
+
+    -openproject)
+
+        if [[ $# -ne 2 ]]; then
+
+            error "Project name to open must be provided."
+            exit 1
+        fi
+
+        PROJECT_DIR="$APPLICATIONS_DIR/$2"
+
+        if [[ ! -d "$PROJECT_DIR" ]]; then
+
+            error "Project not found:"
+            error "$PROJECT_DIR"
+
+            exit 1
+        fi
+
+        check_project
+
+        if command -v code >/dev/null 2>&1; then
+
+            info "Opening project in VS Code..."
+            code "$PROJECT_DIR"
+
+        else
+
+            warning "VS Code 'code' command not found."
+        fi
+
+        activate_venv
+
+        if [[ -n "$(get_board)" ]]; then
+
+            info "Performing clean build..."
+            run_build clean
+
+        else
+
+            warning "board.txt is empty."
+            warning "Build not performed."
+        fi
+
+        ;;
+
+    # --------------------------------------------------------
+    # Show Projects
+    # --------------------------------------------------------
+
+    -show)
+
+        if [[ ! -d "$APPLICATIONS_DIR" ]]; then
+
+            error "Applications folder not found:"
+            error "$APPLICATIONS_DIR"
+
+            exit 1
+        fi
+
+        echo
+        echo "Projects in Applications folder:"
+        echo
+
+        find "$APPLICATIONS_DIR" \
+            -maxdepth 1 \
+            -mindepth 1 \
+            -type d \
+            -printf '%f\n' |
+            sort
+
+        echo
+        ;;
+
+    # --------------------------------------------------------
+    # Status
+    # --------------------------------------------------------
+
+    -status)
+
+        check_project
+        activate_venv
+        show_status
+        ;;
+
+    # --------------------------------------------------------
+    # Build
+    # --------------------------------------------------------
+
+    -build)
+
+        check_project
+        activate_venv
+
+        run_build normal
+        ;;
+
+    # --------------------------------------------------------
+    # Flash
+    # --------------------------------------------------------
+
+    -flash)
+
+        check_project
+        activate_venv
+
+        run_build normal
+        run_flash
+        ;;
+
+    # --------------------------------------------------------
+    # Clean
+    # --------------------------------------------------------
+
+    -clean)
+
+        check_project
+        activate_venv
+
+        run_build clean
+        ;;
+
+    # --------------------------------------------------------
+    # Clean Flash
+    # --------------------------------------------------------
+
+    -clean-flash)
+
+        check_project
+        activate_venv
+
+        run_build clean
+        run_flash
+        ;;
+
+    # --------------------------------------------------------
+    # Flash Only
+    # --------------------------------------------------------
+
+    -flash-only)
+
+        check_project
+        activate_venv
+
+        run_flash
+        ;;
+
+    # --------------------------------------------------------
+    # Debug
+    # --------------------------------------------------------
+
+    -debug)
+
+        check_project
+        activate_venv
+
+        run_build normal
+        run_debug
+        ;;
+
+    # --------------------------------------------------------
+    # Debug Server
+    # --------------------------------------------------------
+
+    -debugserver)
+
+        check_project
+        activate_venv
+
+        run_build normal
+        run_debugserver
+        ;;
+
+    # --------------------------------------------------------
+    # Menuconfig
+    # --------------------------------------------------------
+
+    -menuconfig)
+
+        check_project
+        activate_venv
+
+        if [[ -z "$(get_board)" ]]; then
+
+            error "Board not selected."
+            error "board.txt is empty."
+
+            exit 1
+        fi
+
+        # Configure/build if build does not exist
+        if [[ ! -d "$PROJECT_DIR/$BUILD_DIR" ]]; then
+            run_build normal
+        fi
+
+        info "Opening menuconfig..."
+
+        west build \
+            --build-dir "$PROJECT_DIR/$BUILD_DIR" \
+            -t menuconfig
+
+        ;;
+
+    # --------------------------------------------------------
+    # Pristine
+    # --------------------------------------------------------
+
+    -pristine)
+
+        check_project
+
+        if [[ -d "$PROJECT_DIR/$BUILD_DIR" ]]; then
+
+            info "$PROJECT_DIR/$BUILD_DIR is being deleted..."
+
+            rm -rf -- "$PROJECT_DIR/$BUILD_DIR"
+
+            success "Build folder deleted."
+
+        else
+
+            warning "Build folder does not exist."
+        fi
+
+        ;;
+
+    # --------------------------------------------------------
+    # Unknown
+    # --------------------------------------------------------
+
+    *)
+
+        error "Unknown command:"
+        error "$ACTION"
+
+        echo
+
+        show_help
+
+        exit 1
+        ;;
+
+esac
