@@ -71,3 +71,7 @@ You can override these using environment variables:
 - `ZEPHYR_WORKSPACE`
 - `ZEPHYR_APPLICATIONS_DIR`
 - `ZEPHYR_VENV`
+
+## License
+
+MIT License
