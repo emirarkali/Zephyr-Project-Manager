@@ -670,17 +670,6 @@ CONFIG_MAIN_STACK_SIZE=2048
 # ------------------------------------------------------------
 EOF
 
-        # --------------------------------------------------------
-        # app.overlay
-        # --------------------------------------------------------
-
-        cat > "$destination/app.overlay" <<'EOF'
-/*
- * Zephyr Devicetree Overlay
- *
- * Add project-specific devicetree configuration here.
- */
-EOF
 
         # --------------------------------------------------------
         # board.txt
@@ -713,6 +702,20 @@ int main(void)
 
     return 0;
 }
+EOF
+    fi
+
+    # --------------------------------------------------------
+    # app.overlay (ensure it exists)
+    # --------------------------------------------------------
+
+    if [[ ! -f "$destination/app.overlay" ]]; then
+        cat > "$destination/app.overlay" <<'EOF'
+/*
+ * Zephyr Devicetree Overlay
+ *
+ * Add project-specific devicetree configuration here.
+ */
 EOF
     fi
 
