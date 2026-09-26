@@ -97,7 +97,7 @@ zephyrproject -monitor
 ```
 **What it does:**
 - Automatically detects connected boards (e.g., `/dev/ttyACM0` or `/dev/ttyUSB0`).
-- Connects to the board's serial output at `115200` baud using Python's built-in `miniterm`. No third-party serial programs (like minicom or screen) needed!
+- Connects to the board's serial output at `115200` baud using `picocom`. (Requires `picocom` to be installed: `sudo apt-get install picocom`).
 
 ### 8. Exporting/Packaging a Project
 ```bash

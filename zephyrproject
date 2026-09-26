@@ -1473,10 +1473,16 @@ source ~/.zephyrproject-completion.bash
             exit 1
         fi
         
-        info "Connecting to $PORT at 115200 baud..."
-        info "Press Ctrl+] to exit the monitor."
+        if ! command -v picocom &> /dev/null; then
+            error "picocom is not installed."
+            info "Install it using: sudo apt-get install picocom"
+            exit 1
+        fi
+
+        info "Connecting to $PORT at 115200 baud using picocom..."
+        info "Press Ctrl+A then Ctrl+X to exit the monitor."
         
-        python3 -m serial.tools.miniterm "$PORT" 115200
+        picocom -b 115200 "$PORT"
         ;;
 
     # --------------------------------------------------------
