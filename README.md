@@ -33,37 +33,63 @@ Then restart your terminal or run `source ~/.bashrc`.
 
 ## Usage
 
-Create a new project:
+This tool is designed around a simple, interactive workflow. You don't need to memorize complex `west` or `cmake` commands.
+
+### 1. Creating a New Project
 ```bash
 zephyrproject -newproject <project-name>
 ```
+**What it does:** 
+- Creates a new Zephyr application folder under `~/zephyrproject/applications/`.
+- Generates a template `CMakeLists.txt`, `prj.conf`, and `src/main.c`.
+- **Interactive Board Selection:** It will prompt you to type your target board name (e.g., `nucleo_f303re`). It validates the board against the official Zephyr list to prevent typos!
+- Configures `.vscode/launch.json` dynamically, automatically locating your local `arm-zephyr-eabi-gdb` path.
 
-Open a project in VS Code (auto-triggers a clean build):
-```bash
-zephyrproject -openproject <project-name>
-```
-
-Copy an existing project:
+### 2. Copying/Duplicating a Project
 ```bash
 zephyrproject -copy <source-project> <new-project>
 ```
+**What it does:** 
+- Perfect for prototyping! Safely duplicates an existing project folder.
+- Automatically excludes the heavy `build/` directory from the copy.
+- Prompts you to either keep the original board (`k`), change it, or leave it blank (`q`).
+- Opens the new project in VS Code automatically.
 
-Build, flash, and debug:
+### 3. Opening a Project in VS Code
 ```bash
-zephyrproject -build
-zephyrproject -flash
+zephyrproject -openproject <project-name>
+```
+**What it does:** 
+- Opens the specified project directly in Visual Studio Code.
+- If the project has a valid board selected, it automatically performs a clean `west build` to ensure intellisense and the build environment are up to date.
+
+### 4. Building and Flashing
+Navigate to your project directory or use these commands directly via VS Code Tasks:
+
+- `zephyrproject -build` : Performs a standard `west build`.
+- `zephyrproject -clean` : Performs a pristine build (`west build -p always`).
+- `zephyrproject -flash` : Builds the project and flashes it to your connected board.
+- `zephyrproject -clean-flash` : Pristine build + flash.
+- `zephyrproject -flash-only` : Skips the build process and directly flashes the existing `zephyr.elf`.
+
+### 5. Debugging
+```bash
 zephyrproject -debug
 ```
+**What it does:** 
+- Builds the project and starts the OpenOCD GDB server in your terminal.
+- Perfectly integrates with the VS Code `Cortex-Debug` extension (configured via the generated `launch.json`).
 
-List all available projects:
+### 6. Managing Projects
 ```bash
 zephyrproject -show
 ```
+Lists all your active Zephyr projects located in the applications directory.
 
-Delete a project safely:
 ```bash
 zephyrproject -delete <project-name>
 ```
+Safely deletes a project folder. Includes a `[y/N]` confirmation prompt to prevent accidental data loss.
 
 ## Directory Structure Assumptions
 By default, the script looks for your workspace at `~/zephyrproject` and applications at `~/zephyrproject/applications`. 
