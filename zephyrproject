@@ -101,6 +101,12 @@ Usage:
   zephyrproject -install-completion
       Installs bash tab auto-completion for this script.
 
+  zephyrproject -export "project-name"
+      Exports the project to a .tar.gz archive, excluding the build folder.
+
+  zephyrproject -monitor
+      Automatically detects and opens the serial port monitor (115200 baud).
+
   zephyrproject -delete "project-name"
       Deletes the specified project from the Applications folder.
 
@@ -1387,7 +1393,7 @@ _zephyrproject_completion() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    local commands="-newproject -copy -openproject -show -build -clean -flash -clean-flash -flash-only -debug -delete -install-completion -help"
+    local commands="-newproject -copy -openproject -show -build -clean -flash -clean-flash -flash-only -debug -delete -export -monitor -install-completion -help"
     
     local apps_dir="${ZEPHYR_APPLICATIONS_DIR:-${ZEPHYR_WORKSPACE:-$HOME/zephyrproject}/applications}"
 
@@ -1397,7 +1403,7 @@ _zephyrproject_completion() {
     fi
 
     case "$prev" in
-        -openproject|-delete|-copy)
+        -openproject|-delete|-copy|-export)
             if [[ -d "$apps_dir" ]]; then
                 local projects=$(find "$apps_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$projects" -- "$cur") )
@@ -1421,6 +1427,56 @@ source ~/.zephyrproject-completion.bash
 
         success "Bash completion installed successfully!"
         warning "Please restart your terminal or run: source ~/.bashrc"
+        ;;
+
+
+    # --------------------------------------------------------
+    # Export Project
+    # --------------------------------------------------------
+
+    -export)
+        if [[ $# -ne 2 ]]; then
+            error "Project name to export must be provided."
+            exit 1
+        fi
+
+        PROJECT_DIR="$APPLICATIONS_DIR/$2"
+
+        if [[ ! -d "$PROJECT_DIR" ]]; then
+            error "Project not found:"
+            error "$PROJECT_DIR"
+            exit 1
+        fi
+
+        EXPORT_NAME="${2}_export_$(date +%Y%m%d_%H%M).tar.gz"
+        info "Exporting project $2..."
+        
+        (cd "$APPLICATIONS_DIR" && tar -czf "$EXPORT_NAME" --exclude="$2/build" --exclude="$2/.vscode/.browse*" "$2")
+        
+        if [[ $? -eq 0 ]]; then
+            success "Project exported successfully:"
+            echo -e "  ${YELLOW}$APPLICATIONS_DIR/$EXPORT_NAME${NC}"
+        else
+            error "Export failed."
+            exit 1
+        fi
+        ;;
+
+    # --------------------------------------------------------
+    # Serial Monitor
+    # --------------------------------------------------------
+
+    -monitor)
+        PORT=$(ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | head -n 1)
+        if [[ -z "$PORT" ]]; then
+            error "No serial port (ttyACM* or ttyUSB*) detected!"
+            exit 1
+        fi
+        
+        info "Connecting to $PORT at 115200 baud..."
+        info "Press Ctrl+] to exit the monitor."
+        
+        python3 -m serial.tools.miniterm "$PORT" 115200
         ;;
 
     # --------------------------------------------------------

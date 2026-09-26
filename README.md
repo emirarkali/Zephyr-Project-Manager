@@ -91,6 +91,22 @@ zephyrproject -delete <project-name>
 ```
 Safely deletes a project folder. Includes a `[y/N]` confirmation prompt to prevent accidental data loss.
 
+### 7. Serial Port Monitor
+```bash
+zephyrproject -monitor
+```
+**What it does:**
+- Automatically detects connected boards (e.g., `/dev/ttyACM0` or `/dev/ttyUSB0`).
+- Connects to the board's serial output at `115200` baud using Python's built-in `miniterm`. No third-party serial programs (like minicom or screen) needed!
+
+### 8. Exporting/Packaging a Project
+```bash
+zephyrproject -export <project-name>
+```
+**What it does:**
+- Compresses the specified project into a `.tar.gz` archive.
+- Automatically excludes the massive `build/` folder and IDE cache files, reducing the size from gigabytes to kilobytes! Perfect for sharing your code with others.
+
 ## Directory Structure Assumptions
 By default, the script looks for your workspace at `~/zephyrproject` and applications at `~/zephyrproject/applications`. 
 You can override these using environment variables:
