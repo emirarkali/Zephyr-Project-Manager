@@ -37,11 +37,12 @@ This tool is designed around a simple, interactive workflow. You don't need to m
 
 ### 1. Creating a New Project
 ```bash
-zephyrproject -newproject <project-name>
+zephyrproject -newproject <project-name> [sample-path]
 ```
 **What it does:** 
 - Creates a new Zephyr application folder under `~/zephyrproject/applications/`.
-- Generates a template `CMakeLists.txt`, `prj.conf`, and `src/main.c`.
+- If `[sample-path]` is provided (e.g. `basic/blinky`), it automatically copies the source code and configurations directly from Zephyr's built-in samples (`$ZEPHYR_WORKSPACE/zephyr/samples/`).
+- Otherwise, it generates a clean template `CMakeLists.txt`, `prj.conf`, and `src/main.c`.
 - **Interactive Board Selection:** It will prompt you to type your target board name (e.g., `nucleo_f303re`). It validates the board against the official Zephyr list to prevent typos!
 - Configures `.vscode/launch.json` dynamically, automatically locating your local `arm-zephyr-eabi-gdb` path.
 

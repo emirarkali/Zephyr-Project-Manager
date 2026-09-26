@@ -84,8 +84,10 @@ Zephyr Project Helper
 
 Usage:
 
-  zephyrproject -newproject "project-name"
-      Creates a new minimal Zephyr project from scratch.
+  zephyrproject -newproject "project-name" ["sample/path"]
+      Creates a new Zephyr project. If a sample path is provided, it copies
+      the source files from $ZEPHYR_WORKSPACE/zephyr/samples/<path>.
+      Otherwise, it creates a minimal project from scratch.
       Board selection is interactive.
       If board is not selected, board.txt is left empty and no build is performed.
 
@@ -536,6 +538,7 @@ update_cmake_project_name()
 create_new_project()
 {
     local project_name="$1"
+    local sample_path="${2:-}"
     local destination="$APPLICATIONS_DIR/$project_name"
     local cmake_project_name="${project_name//-/_}"
 
