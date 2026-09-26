@@ -579,7 +579,7 @@ create_new_project()
             question "Select [1-5 or q]: "
             read -r sample_choice
             case "$sample_choice" in
-                1) selected_sample="basic/hello_world"; break ;;
+                1) selected_sample="hello_world"; break ;;
                 2) selected_sample="basic/blinky"; break ;;
                 3) selected_sample="basic/button"; break ;;
                 4) selected_sample="basic/fade_led"; break ;;
