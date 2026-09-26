@@ -279,7 +279,7 @@ board_exists()
 
     [[ -n "$board" ]] || return 1
 
-    west boards -f "{name}" 2>/dev/null |
+    (cd "$ZEPHYR_WORKSPACE" && west boards -f "{name}" 2>/dev/null) |
         sed '/^[[:space:]]*$/d' |
         grep -Fx -- "$board" >/dev/null
 }
@@ -295,7 +295,7 @@ show_similar_boards()
     echo
     info "Similar Zephyr board names:"
 
-    west boards -f "{name}" 2>/dev/null |
+    (cd "$ZEPHYR_WORKSPACE" && west boards -f "{name}" 2>/dev/null) |
         grep -i -- "$board" |
         head -n 10 || true
 
