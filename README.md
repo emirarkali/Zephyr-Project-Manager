@@ -15,7 +15,7 @@ A powerful, plug-and-play command-line utility for streamlining Zephyr RTOS proj
 
 Download the script and make it executable:
 ```bash
-wget https://raw.githubusercontent.com/emirarkali/Zephyr-Project-Manager/main/zephyrproject
+wget -O zephyrproject https://raw.githubusercontent.com/emirarkali/Zephyr-Project-Manager/main/zephyrproject
 chmod +x zephyrproject
 ```
 
