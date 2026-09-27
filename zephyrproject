@@ -84,10 +84,8 @@ Zephyr Project Helper
 
 Usage:
 
-  zephyrproject -newproject "project-name" [-sample]
-      Creates a new Zephyr project. If -sample is provided, you can interactively
-      select and copy one of the basic sample projects.
-      Otherwise, it creates a minimal project from scratch.
+  zephyrproject -newproject "project-name"
+      Creates a new minimal Zephyr project from scratch.
       Board selection is interactive.
       If board is not selected, board.txt is left empty and no build is performed.
 
@@ -96,18 +94,17 @@ Usage:
       build/ folder is removed from the copy.
       Board can be kept, changed or left empty.
 
+  zephyrproject -import-cube ["cube-folder"] ["new-project"]
+      Converts an STM32CubeIDE project to Zephyr using Gemini AI.
+      Scans .ioc and source files, generates Zephyr code,
+      prj.conf, Devicetree overlays, and sets up VS Code.
+
   zephyrproject -openproject "project-name"
       Opens the project in Applications with VS Code.
       Performs a clean build if board exists.
 
   zephyrproject -install-completion
       Installs bash tab auto-completion for this script.
-
-  zephyrproject -export "project-name"
-      Exports the project to a .tar.gz archive, excluding the build folder.
-
-  zephyrproject -monitor
-      Automatically detects and opens the serial port monitor (115200 baud).
 
   zephyrproject -delete "project-name"
       Deletes the specified project from the Applications folder.
@@ -234,6 +231,8 @@ activate_venv()
     # shellcheck disable=SC1090
     source "$ZEPHYR_VENV/bin/activate"
 
+    export ZEPHYR_BASE="${ZEPHYR_BASE:-$ZEPHYR_WORKSPACE/zephyr}"
+
     if ! command -v west >/dev/null 2>&1; then
         error "Virtual environment activated but west not found."
         exit 1
@@ -279,7 +278,7 @@ board_exists()
 
     [[ -n "$board" ]] || return 1
 
-    (cd "$ZEPHYR_WORKSPACE" && west boards -f "{name}" 2>/dev/null) |
+    west boards -f "{name}" 2>/dev/null |
         sed '/^[[:space:]]*$/d' |
         grep -Fx -- "$board" >/dev/null
 }
@@ -295,7 +294,7 @@ show_similar_boards()
     echo
     info "Similar Zephyr board names:"
 
-    (cd "$ZEPHYR_WORKSPACE" && west boards -f "{name}" 2>/dev/null) |
+    west boards -f "{name}" 2>/dev/null |
         grep -i -- "$board" |
         head -n 10 || true
 
@@ -538,7 +537,6 @@ update_cmake_project_name()
 create_new_project()
 {
     local project_name="$1"
-    local sample_path="${2:-}"
     local destination="$APPLICATIONS_DIR/$project_name"
     local cmake_project_name="${project_name//-/_}"
 
@@ -547,50 +545,12 @@ create_new_project()
     check_command mkdir
     check_command cat
 
-    if [[ ! -d "$APPLICATIONS_DIR" ]]; then
-        error "Applications folder not found:"
-        error "$APPLICATIONS_DIR"
-        exit 1
-    fi
+    mkdir -p "$APPLICATIONS_DIR"
 
     if [[ -e "$destination" ]]; then
         error "A file or folder with this name already exists:"
         error "$destination"
         exit 1
-    fi
-
-    local selected_sample=""
-    if [[ "$sample_path" == "-sample" ]]; then
-        echo
-        echo "------------------------------------------------------------"
-        echo "Sample Selection"
-        echo "------------------------------------------------------------"
-        echo
-        echo "Select a sample project to copy:"
-        echo
-        echo "  1) hello_world"
-        echo "  2) blinky"
-        echo "  3) button"
-        echo "  4) fade_led"
-        echo "  5) philosophers"
-        echo "  q) Quit / No sample (minimal project)"
-        echo
-        while true; do
-            question "Select [1-5 or q]: "
-            read -r sample_choice
-            case "$sample_choice" in
-                1) selected_sample="hello_world"; break ;;
-                2) selected_sample="basic/blinky"; break ;;
-                3) selected_sample="basic/button"; break ;;
-                4) selected_sample="basic/fade_led"; break ;;
-                5) selected_sample="philosophers"; break ;;
-                q|Q) selected_sample=""; break ;;
-                *) warning "Invalid choice. Enter 1-5 or q." ;;
-            esac
-        done
-    elif [[ -n "$sample_path" ]]; then
-        # Backwards compatibility or direct path
-        selected_sample="$sample_path"
     fi
 
     # West is required for board check
@@ -599,39 +559,19 @@ create_new_project()
     info "Creating new Zephyr project..."
     info "Target: $destination"
 
-    if [[ -n "$selected_sample" ]]; then
-        local sample_dir="$ZEPHYR_WORKSPACE/zephyr/samples/$selected_sample"
-        if [[ ! -d "$sample_dir" ]]; then
-            error "Sample folder not found: $sample_dir"
-            exit 1
-        fi
-        
-        info "Copying sample: $selected_sample"
-        mkdir -p "$destination"
-        cp -a "$sample_dir/." "$destination/"
-        
-        mkdir -p "$destination/boards"
-        mkdir -p "$destination/.vscode"
-        
-        rm -rf -- "$destination/build"
-        
-        update_cmake_project_name "$destination/CMakeLists.txt" "$project_name"
-        
-        : > "$destination/board.txt"
-    else
-        # --------------------------------------------------------
-        # Folders
-        # --------------------------------------------------------
+    # --------------------------------------------------------
+    # Folders
+    # --------------------------------------------------------
 
-        mkdir -p "$destination/src"
-        mkdir -p "$destination/boards"
-        mkdir -p "$destination/.vscode"
+    mkdir -p "$destination/src"
+    mkdir -p "$destination/boards"
+    mkdir -p "$destination/.vscode"
 
-        # --------------------------------------------------------
-        # CMakeLists.txt
-        # --------------------------------------------------------
+    # --------------------------------------------------------
+    # CMakeLists.txt
+    # --------------------------------------------------------
 
-        cat > "$destination/CMakeLists.txt" <<EOF
+    cat > "$destination/CMakeLists.txt" <<EOF
 cmake_minimum_required(VERSION 3.20.0)
 
 find_package(Zephyr REQUIRED HINTS \$ENV{ZEPHYR_BASE})
@@ -643,11 +583,11 @@ target_sources(app PRIVATE
 )
 EOF
 
-        # --------------------------------------------------------
-        # prj.conf
-        # --------------------------------------------------------
+    # --------------------------------------------------------
+    # prj.conf
+    # --------------------------------------------------------
 
-        cat > "$destination/prj.conf" <<'EOF'
+    cat > "$destination/prj.conf" <<'EOF'
 # ============================================================
 # Zephyr Project Configuration
 # ============================================================
@@ -670,20 +610,31 @@ CONFIG_MAIN_STACK_SIZE=2048
 # ------------------------------------------------------------
 EOF
 
+    # --------------------------------------------------------
+    # app.overlay
+    # --------------------------------------------------------
 
-        # --------------------------------------------------------
-        # board.txt
-        #
-        # MUST be created from scratch in every new project.
-        # --------------------------------------------------------
+    cat > "$destination/app.overlay" <<'EOF'
+/*
+ * Zephyr Devicetree Overlay
+ *
+ * Add project-specific devicetree configuration here.
+ */
+EOF
 
-        : > "$destination/board.txt"
+    # --------------------------------------------------------
+    # board.txt
+    #
+    # MUST be created from scratch in every new project.
+    # --------------------------------------------------------
 
-        # --------------------------------------------------------
-        # main.c
-        # --------------------------------------------------------
+    : > "$destination/board.txt"
 
-        cat > "$destination/src/main.c" <<'EOF'
+    # --------------------------------------------------------
+    # main.c
+    # --------------------------------------------------------
+
+    cat > "$destination/src/main.c" <<'EOF'
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 
@@ -703,21 +654,6 @@ int main(void)
     return 0;
 }
 EOF
-    fi
-
-    # --------------------------------------------------------
-    # app.overlay (ensure it exists)
-    # --------------------------------------------------------
-
-    if [[ ! -f "$destination/app.overlay" ]]; then
-        cat > "$destination/app.overlay" <<'EOF'
-/*
- * Zephyr Devicetree Overlay
- *
- * Add project-specific devicetree configuration here.
- */
-EOF
-    fi
 
     # --------------------------------------------------------
     # .gitignore
@@ -1146,6 +1082,676 @@ copy_existing_project()
 }
 
 # ============================================================
+# STM32CUBE TO ZEPHYR CONVERSION (GEMINI AI)
+# ============================================================
+
+check_internet_connection()
+{
+    info "Checking internet connection..."
+    local online=0
+    if curl -s --connect-timeout 4 -I "https://generativelanguage.googleapis.com" >/dev/null 2>&1; then
+        online=1
+    elif ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then
+        online=1
+    fi
+
+    if [[ "$online" -eq 0 ]]; then
+        error "No internet connection. Couldnt reach out to AI model for conversion."
+        exit 1
+    fi
+
+    success "Internet connection verified."
+}
+
+get_gemini_api_key()
+{
+    local key_file="$HOME/.config/zephyrproject/gemini_api_key.txt"
+    local key="${GEMINI_API_KEY:-}"
+
+    if [[ -z "$key" && -f "$key_file" ]]; then
+        key="$(tr -d '[:space:]' < "$key_file")"
+    fi
+
+    if [[ -z "$key" ]]; then
+        echo >&2
+        warning "Gemini API key not found in GEMINI_API_KEY environment variable" >&2
+        warning "or in $key_file." >&2
+        echo >&2
+        info "You can get a free API key at: https://aistudio.google.com/" >&2
+        question "Please enter your Gemini API key: " >&2
+        read -r key
+        key="${key//[[:space:]]/}"
+
+        if [[ -z "$key" ]]; then
+            error "API key cannot be empty. Conversion cancelled." >&2
+            exit 1
+        fi
+
+        mkdir -p "$(dirname "$key_file")"
+        printf '%s\n' "$key" > "$key_file"
+        chmod 600 "$key_file"
+        success "API key saved to $key_file (chmod 600)" >&2
+    fi
+
+    echo "$key"
+}
+
+select_reasoning_effort()
+{
+    echo >&2
+    echo "------------------------------------------------------------" >&2
+    echo "AI Reasoning / Effort Level" >&2
+    echo "------------------------------------------------------------" >&2
+    echo "  1) Low    (Fast response, minimal thinking)" >&2
+    echo "  2) Medium (Balanced reasoning - Recommended)" >&2
+    echo "  3) High   (Deep thinking for complex RTOS, DMA, or bus drivers)" >&2
+    echo >&2
+
+    local choice=""
+    while true; do
+        question "Choose level [1-3] (default 2): " >&2
+        read -r choice
+        choice="${choice//[[:space:]]/}"
+
+        if [[ -z "$choice" || "$choice" == "2" ]]; then
+            echo "medium"
+            return 0
+        elif [[ "$choice" == "1" ]]; then
+            echo "low"
+            return 0
+        elif [[ "$choice" == "3" ]]; then
+            echo "high"
+            return 0
+        else
+            warning "Please enter 1, 2, or 3." >&2
+        fi
+    done
+}
+
+find_cube_project_dir()
+{
+    local input_path="$1"
+
+    if [[ -z "$input_path" ]]; then
+        echo >&2
+        echo "------------------------------------------------------------" >&2
+        echo "STM32Cube Project Location" >&2
+        echo "------------------------------------------------------------" >&2
+        echo "Enter folder path or project name of the STM32CubeIDE project." >&2
+        question "Cube Project: " >&2
+        read -r input_path
+        input_path="${input_path%"${input_path##*[![:space:]]}"}"
+        input_path="${input_path#"${input_path%%[![:space:]]*}"}"
+    fi
+
+    if [[ -z "$input_path" ]]; then
+        error "No project path provided." >&2
+        exit 1
+    fi
+
+    if [[ "$input_path" =~ ^~(/.*)?$ ]]; then
+        input_path="$HOME${input_path#\~}"
+    fi
+
+    if [[ -d "$input_path" ]]; then
+        (cd "$input_path" && pwd)
+        return 0
+    fi
+
+    local search_name
+    search_name="$(basename "$input_path")"
+    info "Searching for Cube project '$search_name'..." >&2
+
+    local found_dir=""
+    found_dir="$(find "$HOME" -maxdepth 4 -type d -name "$search_name" 2>/dev/null | grep -i "cube" | head -n 1 || true)"
+
+    if [[ -z "$found_dir" ]]; then
+        found_dir="$(find "$HOME" -maxdepth 4 -type d -name "$search_name" 2>/dev/null | head -n 1 || true)"
+    fi
+
+    if [[ -n "$found_dir" && -d "$found_dir" ]]; then
+        success "Found Cube project at: $found_dir" >&2
+        (cd "$found_dir" && pwd)
+        return 0
+    fi
+
+    error "Could not find folder: $input_path" >&2
+    exit 1
+}
+
+import_cube_project()
+{
+    local cube_input="${1:-}"
+    local target_project_name="${2:-}"
+
+    # 1. Check internet connection
+    check_internet_connection
+
+    # 2. Activate Zephyr environment for west and python
+    activate_venv
+
+    # 3. Retrieve or prompt for Gemini API Key
+    local api_key
+    api_key="$(get_gemini_api_key)"
+
+    # 4. Ask for reasoning effort
+    local reasoning
+    reasoning="$(select_reasoning_effort)"
+    info "Reasoning effort: $reasoning"
+
+    # 5. Locate Cube project folder
+    local cube_dir
+    cube_dir="$(find_cube_project_dir "$cube_input")"
+    info "Source Cube Project: $cube_dir"
+
+    # 6. Determine new project name
+    if [[ -z "$target_project_name" ]]; then
+        local default_name
+        default_name="$(basename "$cube_dir")_zephyr"
+        default_name="${default_name//[^a-zA-Z0-9_-]/_}"
+        echo
+        question "Enter new Zephyr project name [$default_name]: "
+        read -r target_project_name
+        target_project_name="${target_project_name//[[:space:]]/}"
+        if [[ -z "$target_project_name" ]]; then
+            target_project_name="$default_name"
+        fi
+    fi
+
+    validate_project_name "$target_project_name"
+
+    local destination="$APPLICATIONS_DIR/$target_project_name"
+    if [[ -e "$destination" ]]; then
+        error "A project or folder with this name already exists:"
+        error "$destination"
+        exit 1
+    fi
+
+    local temp_json
+    temp_json="$(mktemp /tmp/zephyr_cube_conv_XXXXXX.json)"
+
+    info "Scanning STM32Cube project files (.ioc, main.c, headers)..."
+    info "Connecting to Gemini Flash model for conversion..."
+
+    local py_bin="python3"
+    if [[ -x "$ZEPHYR_VENV/bin/python3" ]]; then
+        py_bin="$ZEPHYR_VENV/bin/python3"
+    fi
+
+    local py_success=0
+    if "$py_bin" - "$cube_dir" "$api_key" "$reasoning" "$temp_json" << 'EOF_PYTHON'
+import os
+import sys
+import json
+import glob
+import urllib.request
+import urllib.error
+
+cube_dir = sys.argv[1]
+api_key = sys.argv[2]
+reasoning = sys.argv[3]
+out_file = sys.argv[4]
+
+budget_map = {"low": 1024, "medium": 4096, "high": 8192}
+thinking_budget = budget_map.get(reasoning, 4096)
+
+# 1. Look for .ioc files
+ioc_files = glob.glob(os.path.join(cube_dir, "*.ioc")) + glob.glob(os.path.join(cube_dir, "*", "*.ioc"))
+ioc_content = ""
+if ioc_files:
+    try:
+        with open(ioc_files[0], "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+            relevant = [l for l in lines if not l.strip().startswith("#") or "Mcu." in l or "Pin" in l or "RCC." in l][:250]
+            ioc_content = "".join(relevant)
+    except Exception as e:
+        ioc_content = f"Error reading .ioc: {e}"
+
+# 2. Look for main.c
+main_candidates = [
+    os.path.join(cube_dir, "Core", "Src", "main.c"),
+    os.path.join(cube_dir, "Src", "main.c"),
+    os.path.join(cube_dir, "main.c")
+]
+main_path = None
+for mc in main_candidates:
+    if os.path.isfile(mc):
+        main_path = mc
+        break
+
+if not main_path:
+    found = glob.glob(os.path.join(cube_dir, "**", "main.c"), recursive=True)
+    if found:
+        main_path = found[0]
+
+if not main_path or not os.path.isfile(main_path):
+    print("Error: Could not locate main.c in STM32Cube project directory.", file=sys.stderr)
+    sys.exit(1)
+
+with open(main_path, "r", encoding="utf-8", errors="ignore") as f:
+    main_c_content = f.read()
+
+# 3. Look for other user sources
+other_sources = {}
+src_dir = os.path.dirname(main_path)
+for src_file in glob.glob(os.path.join(src_dir, "*.c")):
+    fname = os.path.basename(src_file)
+    if fname not in ["main.c", "system_stm32f4xx.c", "system_stm32f3xx.c", "system_stm32f1xx.c", "stm32f4xx_hal_msp.c"]:
+        try:
+            with open(src_file, "r", encoding="utf-8", errors="ignore") as f:
+                c = f.read()
+                if len(c) < 15000:
+                    other_sources[fname] = c
+        except Exception:
+            pass
+
+main_h_content = ""
+inc_dir = os.path.join(cube_dir, "Core", "Inc")
+if os.path.isdir(inc_dir):
+    for hf in glob.glob(os.path.join(inc_dir, "*.h")):
+        if "stm32" not in os.path.basename(hf).lower():
+            try:
+                with open(hf, "r", encoding="utf-8", errors="ignore") as f:
+                    main_h_content += f"\n--- {os.path.basename(hf)} ---\n" + f.read()
+            except Exception:
+                pass
+
+prompt = f"""You are an elite embedded systems engineer specializing in STM32 and Zephyr RTOS.
+Convert this STM32Cube (HAL / LL / FreeRTOS) project into a modern, production-ready Zephyr RTOS application.
+
+--- HARDWARE CONFIGURATION (.ioc snippet) ---
+{ioc_content if ioc_content else "No .ioc file. Deduce MCU and pinout from main.c"}
+
+--- HEADERS ---
+{main_h_content if main_h_content else "None"}
+
+--- Core/Src/main.c ---
+{main_c_content}
+
+--- OTHER USER SOURCES ---
+{json.dumps(other_sources, indent=2) if other_sources else "None"}
+
+REQUIREMENTS:
+1. Translate STM32 HAL peripheral calls (GPIO, UART, I2C, SPI, Timers, EXTI/Interrupts) into modern Zephyr driver APIs (e.g. gpio_dt_spec, gpio_pin_configure_dt, gpio_pin_set_dt, k_msleep, printk, gpio_init_callback, etc.).
+2. If delays (HAL_Delay) were used, replace with non-blocking k_msleep() or k_sleep().
+3. If FreeRTOS was used, translate tasks into Zephyr threads (k_thread_create or K_THREAD_DEFINE) and synchronization objects (k_sem, k_msgq, etc.).
+4. Identify the closest standard Zephyr board target (e.g. nucleo_f446re, nucleo_f303re, nucleo_l476rg, etc.).
+5. Produce complete, working src/main.c.
+6. Produce complete prj.conf with necessary CONFIG_* options enabled.
+7. Produce app.overlay if devicetree overrides are necessary (otherwise empty string).
+8. Provide a concise summary of the conversion.
+
+Respond strictly with a JSON object with these exact keys:
+{{
+  "suggested_board": "<string: zephyr board identifier, e.g. nucleo_f446re>",
+  "main_c": "<string: full content of src/main.c>",
+  "prj_conf": "<string: full content of prj.conf>",
+  "app_overlay": "<string: content of app.overlay or empty string>",
+  "summary": "<string: conversion summary and notes>"
+}}
+"""
+
+models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+response_json = None
+last_error = ""
+
+for model in models:
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json"}
+    }
+    if "2.5" in model and thinking_budget > 0:
+        payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": thinking_budget}
+
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            candidate = data.get("candidates", [{}])[0]
+            parts = candidate.get("content", {}).get("parts", [{}])
+            text = "".join([p.get("text", "") for p in parts])
+            response_json = json.loads(text)
+            break
+    except urllib.error.HTTPError as e:
+        err_msg = e.read().decode("utf-8", errors="ignore")
+        last_error = f"HTTP {e.code}: {err_msg}"
+        if "thinkingConfig" in err_msg and "generationConfig" in payload and "thinkingConfig" in payload["generationConfig"]:
+            del payload["generationConfig"]["thinkingConfig"]
+            try:
+                req2 = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"}
+                )
+                with urllib.request.urlopen(req2, timeout=90) as resp2:
+                    data = json.loads(resp2.read().decode("utf-8"))
+                    candidate = data.get("candidates", [{}])[0]
+                    parts = candidate.get("content", {}).get("parts", [{}])
+                    text = "".join([p.get("text", "") for p in parts])
+                    response_json = json.loads(text)
+                    break
+            except Exception as e2:
+                last_error = str(e2)
+        continue
+    except Exception as e:
+        last_error = str(e)
+        continue
+
+if not response_json:
+    print(f"Error calling Gemini API: {last_error}", file=sys.stderr)
+    sys.exit(1)
+
+with open(out_file, "w", encoding="utf-8") as f:
+    json.dump(response_json, f, indent=2)
+
+print("SUCCESS")
+EOF_PYTHON
+    then
+        rm -f "$temp_json"
+        error "AI conversion failed."
+        exit 1
+    fi
+
+    success "AI conversion completed successfully."
+
+    # 7. Create project directory structure
+    info "Scaffolding Zephyr project in $destination..."
+    mkdir -p "$destination/src"
+    mkdir -p "$destination/boards"
+    mkdir -p "$destination/.vscode"
+
+    # 8. Unpack JSON and write files
+    local meta_file
+    meta_file="$(mktemp /tmp/zephyr_meta_XXXXXX.txt)"
+
+    "$py_bin" - "$temp_json" "$destination" "$meta_file" << 'EOF_UNPACK'
+import sys
+import json
+import os
+
+json_file = sys.argv[1]
+dst = sys.argv[2]
+meta_file = sys.argv[3]
+
+with open(json_file, "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+# Write src/main.c
+with open(os.path.join(dst, "src", "main.c"), "w", encoding="utf-8") as f:
+    f.write(data.get("main_c", ""))
+
+# Write prj.conf
+with open(os.path.join(dst, "prj.conf"), "w", encoding="utf-8") as f:
+    f.write(data.get("prj_conf", ""))
+
+# Write app.overlay
+overlay = data.get("app_overlay", "")
+with open(os.path.join(dst, "app.overlay"), "w", encoding="utf-8") as f:
+    f.write(overlay if overlay else "/* Zephyr Devicetree Overlay */\n")
+
+with open(meta_file, "w", encoding="utf-8") as f:
+    f.write(data.get("suggested_board", "").strip() + "\n")
+    f.write(data.get("summary", "").strip() + "\n")
+EOF_UNPACK
+
+    rm -f "$temp_json"
+
+    local suggested_board
+    suggested_board="$(head -n 1 "$meta_file" || true)"
+    local summary_text
+    summary_text="$(tail -n +2 "$meta_file" || true)"
+    rm -f "$meta_file"
+
+    # Write CMakeLists.txt
+    local cmake_project_name="${target_project_name//-/_}"
+    cat > "$destination/CMakeLists.txt" <<EOF
+cmake_minimum_required(VERSION 3.20.0)
+
+find_package(Zephyr REQUIRED HINTS \$ENV{ZEPHYR_BASE})
+
+project($cmake_project_name)
+
+target_sources(app PRIVATE
+    src/main.c
+)
+EOF
+
+    # Write .gitignore
+    cat > "$destination/.gitignore" <<'EOF'
+build/
+.vscode/*.log
+*.swp
+*~
+EOF
+
+    # VS Code tasks and launch
+    cat > "$destination/.vscode/tasks.json" <<'EOF'
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Zephyr: Build",
+            "type": "shell",
+            "command": "zephyrproject",
+            "args": [
+                "-build"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "Zephyr: Clean Build",
+            "type": "shell",
+            "command": "zephyrproject",
+            "args": [
+                "-clean"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ]
+        },
+        {
+            "label": "Zephyr: Flash",
+            "type": "shell",
+            "command": "zephyrproject",
+            "args": [
+                "-flash-only"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Zephyr: Build and Flash",
+            "type": "shell",
+            "command": "zephyrproject",
+            "args": [
+                "-flash"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Zephyr: Clean Build and Flash",
+            "type": "shell",
+            "command": "zephyrproject",
+            "args": [
+                "-clean-flash"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Zephyr: Start OpenOCD Server",
+            "type": "shell",
+            "command": "zephyrproject",
+            "args": [
+                "-debugserver"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "isBackground": true,
+            "problemMatcher": {
+                "owner": "openocd",
+                "pattern": {
+                    "regexp": ".*"
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "Open On-Chip Debugger",
+                    "endsPattern": "Listening on port 3333 for gdb connections"
+                }
+            }
+        }
+    ]
+}
+EOF
+
+    local DYNAMIC_GDB_PATH="\${env:HOME}/zephyr-sdk-1.0.1/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb"
+    if [[ -n "${ZEPHYR_SDK_INSTALL_DIR:-}" ]]; then
+        DYNAMIC_GDB_PATH="${ZEPHYR_SDK_INSTALL_DIR}/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb"
+    else
+        local found_sdk="$(ls -d $HOME/zephyr-sdk* 2>/dev/null | sort -rV | head -n 1)"
+        if [[ -n "$found_sdk" ]]; then
+            if [[ -f "$found_sdk/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb" ]]; then
+                DYNAMIC_GDB_PATH="$found_sdk/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb"
+            elif [[ -f "$found_sdk/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb" ]]; then
+                DYNAMIC_GDB_PATH="$found_sdk/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb"
+            fi
+        fi
+    fi
+
+    cat > "$destination/.vscode/launch.json" <<EOF
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Zephyr: Build and Debug",
+            "type": "cortex-debug",
+            "request": "launch",
+
+            "cwd": "\${workspaceFolder}",
+
+            "executable": "\${workspaceFolder}/build/zephyr/zephyr.elf",
+
+            "servertype": "external",
+            "gdbTarget": "localhost:3333",
+
+            "gdbPath": "${DYNAMIC_GDB_PATH}",
+
+            "preLaunchTask": "Zephyr: Start OpenOCD Server",
+
+            "runToEntryPoint": "main",
+
+            "device": "",
+            "interface": "swd",
+
+            "showDevDebugOutput": "raw"
+        }
+    ]
+}
+EOF
+
+    # PROJECT_INFO.md
+    cat > "$destination/PROJECT_INFO.md" <<EOF
+# $target_project_name
+
+Converted from STM32Cube project ($cube_dir) via Gemini AI.
+
+## AI Conversion Summary
+$summary_text
+
+## Board
+Board configuration is stored in:
+\`\`\`text
+board.txt
+\`\`\`
+
+## Build & Flash Commands
+\`\`\`bash
+zephyrproject -build
+zephyrproject -clean
+zephyrproject -flash
+\`\`\`
+EOF
+
+    # 9. Board Selection
+    : > "$destination/board.txt"
+    if [[ -n "$suggested_board" ]] && board_exists "$suggested_board"; then
+        echo
+        info "AI suggested Zephyr board: $suggested_board"
+        question "Accept this board? [Y/n]: "
+        local accept_board
+        read -r accept_board
+        accept_board="${accept_board//[[:space:]]/}"
+        if [[ -z "$accept_board" || "$accept_board" == "y" || "$accept_board" == "Y" ]]; then
+            write_board "$destination" "$suggested_board"
+            success "Board configured: $suggested_board"
+        else
+            select_board_for_new_project "$destination"
+        fi
+    else
+        if [[ -n "$suggested_board" ]]; then
+            warning "Suggested board '$suggested_board' not found in Zephyr board list."
+        fi
+        select_board_for_new_project "$destination"
+    fi
+
+    PROJECT_DIR="$destination"
+    sync_launch_json
+
+    echo
+    echo "============================================================"
+    echo "Conversion Summary"
+    echo "============================================================"
+    echo "$summary_text"
+    echo "============================================================"
+    echo
+
+    success "Zephyr project created successfully: $destination"
+
+    # Open in VS Code if available
+    if command -v code >/dev/null 2>&1; then
+        info "Opening in VS Code..."
+        code "$destination"
+    fi
+
+    # Optional immediate build
+    if [[ -n "$(get_board)" ]]; then
+        echo
+        question "Would you like to test build the project now? [y/N]: "
+        local do_build
+        read -r do_build
+        if [[ "$do_build" == "y" || "$do_build" == "Y" ]]; then
+            info "Building converted project..."
+            run_build normal
+        fi
+    fi
+}
+
+# ============================================================
 # OPENOCD
 # ============================================================
 
@@ -1405,17 +2011,17 @@ case "$ACTION" in
 
     -newproject)
 
-        if [[ $# -lt 2 || $# -gt 3 ]]; then
+        if [[ $# -ne 2 ]]; then
 
-            error "Invalid arguments for new project."
+            error "Exactly one project name must be provided for a new project."
             error
             error 'Example:'
-            error 'zephyrproject -newproject "uart_test" [-sample]'
+            error 'zephyrproject -newproject "uart_test"'
 
             exit 1
         fi
 
-        create_new_project "$2" "${3:-}"
+        create_new_project "$2"
         ;;
 
     # --------------------------------------------------------
@@ -1437,7 +2043,14 @@ case "$ACTION" in
         copy_existing_project "$2" "$3"
         ;;
 
+    # --------------------------------------------------------
+    # Import STM32Cube Project
+    # --------------------------------------------------------
 
+    -import-cube|-cube|--import-cube)
+
+        import_cube_project "${2:-}" "${3:-}"
+        ;;
 
     # --------------------------------------------------------
     # Install Completion
@@ -1454,7 +2067,7 @@ _zephyrproject_completion() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    local commands="-newproject -copy -openproject -show -build -clean -flash -clean-flash -flash-only -debug -delete -export -monitor -install-completion -help"
+    local commands="-newproject -copy -import-cube -openproject -show -build -clean -flash -clean-flash -flash-only -debug -delete -install-completion -help"
     
     local apps_dir="${ZEPHYR_APPLICATIONS_DIR:-${ZEPHYR_WORKSPACE:-$HOME/zephyrproject}/applications}"
 
@@ -1464,11 +2077,15 @@ _zephyrproject_completion() {
     fi
 
     case "$prev" in
-        -openproject|-delete|-copy|-export)
+        -openproject|-delete|-copy)
             if [[ -d "$apps_dir" ]]; then
                 local projects=$(find "$apps_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$projects" -- "$cur") )
             fi
+            return 0
+            ;;
+        -import-cube)
+            COMPREPLY=( $(compgen -d -- "$cur") )
             return 0
             ;;
     esac
@@ -1488,62 +2105,6 @@ source ~/.zephyrproject-completion.bash
 
         success "Bash completion installed successfully!"
         warning "Please restart your terminal or run: source ~/.bashrc"
-        ;;
-
-
-    # --------------------------------------------------------
-    # Export Project
-    # --------------------------------------------------------
-
-    -export)
-        if [[ $# -ne 2 ]]; then
-            error "Project name to export must be provided."
-            exit 1
-        fi
-
-        PROJECT_DIR="$APPLICATIONS_DIR/$2"
-
-        if [[ ! -d "$PROJECT_DIR" ]]; then
-            error "Project not found:"
-            error "$PROJECT_DIR"
-            exit 1
-        fi
-
-        EXPORT_NAME="${2}_export_$(date +%Y%m%d_%H%M).tar.gz"
-        info "Exporting project $2..."
-        
-        (cd "$APPLICATIONS_DIR" && tar -czf "$EXPORT_NAME" --exclude="$2/build" --exclude="$2/.vscode/.browse*" "$2")
-        
-        if [[ $? -eq 0 ]]; then
-            success "Project exported successfully:"
-            echo -e "  ${YELLOW}$APPLICATIONS_DIR/$EXPORT_NAME${NC}"
-        else
-            error "Export failed."
-            exit 1
-        fi
-        ;;
-
-    # --------------------------------------------------------
-    # Serial Monitor
-    # --------------------------------------------------------
-
-    -monitor)
-        PORT=$(ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | head -n 1)
-        if [[ -z "$PORT" ]]; then
-            error "No serial port (ttyACM* or ttyUSB*) detected!"
-            exit 1
-        fi
-        
-        if ! command -v picocom &> /dev/null; then
-            error "picocom is not installed."
-            info "Install it using: sudo apt-get install picocom"
-            exit 1
-        fi
-
-        info "Connecting to $PORT at 115200 baud using picocom..."
-        info "Press Ctrl+A then Ctrl+X to exit the monitor."
-        
-        picocom -b 115200 "$PORT"
         ;;
 
     # --------------------------------------------------------
@@ -1631,13 +2192,7 @@ source ~/.zephyrproject-completion.bash
 
     -show)
 
-        if [[ ! -d "$APPLICATIONS_DIR" ]]; then
-
-            error "Applications folder not found:"
-            error "$APPLICATIONS_DIR"
-
-            exit 1
-        fi
+        mkdir -p "$APPLICATIONS_DIR"
 
         echo
         echo "Projects in Applications folder:"

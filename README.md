@@ -1,115 +1,129 @@
-# Zephyr Project Helper CLI
+# Zephyr Project Helper (`zephyrproject`)
 
-A powerful, plug-and-play command-line utility for streamlining Zephyr RTOS project management, building, flashing, and debugging. Built with tight Visual Studio Code integration.
+A command-line workflow tool for managing, scaffolding, building, flashing, and debugging Zephyr RTOS applications. 
 
-## Features
+This update introduces **AI-powered STM32CubeIDE to Zephyr RTOS migration** powered by Google Gemini Flash models.
 
-- **Interactive Project Creation**: Create minimal Zephyr projects from scratch with interactive board selection.
-- **Project Duplication**: Easily duplicate existing projects (with or without current board selection) for quick prototyping.
-- **VS Code Integration**: Automatically generates `.vscode/tasks.json` and `.vscode/launch.json` tailored specifically for your Zephyr environment.
-- **Dynamic GDB Resolution**: Automatically finds your `arm-zephyr-eabi-gdb` path and Zephyr SDK regardless of version or installation directory.
-- **Bash Auto-Completion**: Includes a robust auto-completion system for project names and commands.
-- **Safe Deletion**: Easily clean up development environments with the built-in safe delete function.
+---
 
-## Installation
+## 🚀 What's New in this Update: `-import-cube`
 
-Download the script directly into your local binary folder and make it executable:
+You can now automatically convert existing **STM32Cube (HAL / LL / FreeRTOS)** projects into fully functional **Zephyr RTOS** applications with a single command.
+
 ```bash
-wget -O ~/.local/bin/zephyrproject https://raw.githubusercontent.com/emirarkali/Zephyr-Project-Manager/main/zephyrproject
-chmod +x ~/.local/bin/zephyrproject
+zephyrproject -import-cube <cube-project-folder-or-name> [new-zephyr-project-name]
 ```
+*(Aliases: `-cube`, `--import-cube`)*
 
-### Install Auto-Completion (Recommended)
-To enable the interactive bash auto-completion features, simply run:
+### 🧠 Key Features of the Converter:
+
+1. **Pre-flight Connectivity Check:**
+   * Verifies network availability before making calls. If offline, exits cleanly with:
+     `"No internet connection. Couldnt reach out to AI model for conversion."`
+
+2. **Secure, Zero-Leak API Key Handling:**
+   * **No hardcoded secrets:** Safe to push to public repositories.
+   * Reads from `~/.config/zephyrproject/gemini_api_key.txt` or `$GEMINI_API_KEY`.
+   * On first run, interactively prompts the user for their free key from [Google AI Studio](https://aistudio.google.com/) and saves it locally with restricted permissions (`chmod 600`).
+
+3. **Selectable AI Reasoning / Thinking Levels:**
+   * **1) Low / Fast:** Minimal thinking budget; ideal for simple GPIO, blink loops, and basic delays.
+   * **2) Medium (Default):** Balanced reasoning budget; ideal for timers, interrupts, and UART.
+   * **3) High / Deep:** Extended thinking budget; ideal for complex RTOS migrations, multi-task synchronization, DMA, and multi-bus systems (SPI/I2C).
+
+4. **Smart STM32Cube Project Scanner:**
+   * Parses **`*.ioc`** files to extract the exact target MCU part number (e.g. `STM32F446RETx`), clock configurations, and pin muxing.
+   * Extracts **`Core/Src/main.c`**, **`Core/Inc/main.h`**, and secondary source files while automatically filtering out heavy ST HAL boilerplate libraries.
+
+5. **Complete Zephyr Scaffolding:**
+   The model doesn't just convert C code; it generates a complete Zephyr project:
+   * **`src/main.c`**: Modern Zephyr APIs (`gpio_dt_spec`, `k_msleep`, `gpio_init_callback`, etc.).
+   * **`prj.conf`**: Automatically enables needed Kconfig subsystems (`CONFIG_GPIO=y`, `CONFIG_SERIAL=y`, etc.).
+   * **`app.overlay`**: Devicetree overlay if custom pin/node overrides are necessary.
+   * **`CMakeLists.txt` & `.gitignore`**: Standard Zephyr build definitions.
+   * **`board.txt`**: Automatically identifies and validates the closest Zephyr board target (e.g., `nucleo_f446re`, `nucleo_f303re`).
+   * **`PROJECT_INFO.md`**: Conversion documentation explaining architectural mappings and design decisions.
+   * **VS Code Integration**: Scaffolds `.vscode/tasks.json` and `.vscode/launch.json` for one-click OpenOCD and GDB debugging.
+
+6. **Interactive Build Verification:**
+   * Prompts to run `zephyrproject -build` immediately after conversion to test compilation.
+
+7. **Tab Auto-completion:**
+   * Full path completion for `-import-cube` when pressing `Tab` in Bash.
+
+---
+
+## 🛠 Prerequisites
+
+* **Zephyr Development Environment:** Installed and initialized via `west`.
+* **Python 3:** Included in your Zephyr virtual environment (`$ZEPHYR_WORKSPACE/.venv`).
+* **Gemini API Key:** A free API key from [Google AI Studio](https://aistudio.google.com/).
+
+---
+
+## 📖 Quick Start
+
+### 1. Install & Setup Completion
 ```bash
+# Make script executable
+chmod +x zephyrproject
+
+# Copy to local path
+cp zephyrproject ~/.local/bin/
+
+# Install tab completion
 zephyrproject -install-completion
+source ~/.bashrc
 ```
-Then restart your terminal or run `source ~/.bashrc`.
 
-## Usage
-
-This tool is designed around a simple, interactive workflow. You don't need to memorize complex `west` or `cmake` commands.
-
-### 1. Creating a New Project
+### 2. Convert an STM32Cube Project
 ```bash
-zephyrproject -newproject <project-name> [-sample]
-```
-**What it does:** 
-- Creates a new Zephyr application folder under `~/zephyrproject/applications/`.
-- If `-sample` is provided, it interactively prompts you to select and copy one of the basic sample projects from Zephyr's built-in samples.
-- Otherwise, it generates a clean template `CMakeLists.txt`, `prj.conf`, and `src/main.c`.
-- **Interactive Board Selection:** It will prompt you to type your target board name (e.g., `nucleo_f303re`). It validates the board against the official Zephyr list to prevent typos!
-- Configures `.vscode/launch.json` dynamically, automatically locating your local `arm-zephyr-eabi-gdb` path.
+# Convert by passing path directly:
+zephyrproject -import-cube ~/STM32CubeIDE/workspace/f446_blink my_zephyr_blink
 
-### 2. Copying/Duplicating a Project
+# Or run interactively:
+zephyrproject -import-cube
+```
+
+### 3. Build & Flash
 ```bash
-zephyrproject -copy <source-project> <new-project>
+cd ~/zephyrproject/applications/my_zephyr_blink
+
+# Normal build
+zephyrproject -build
+
+# Build and flash to connected board
+zephyrproject -flash
 ```
-**What it does:** 
-- Perfect for prototyping! Safely duplicates an existing project folder.
-- Automatically excludes the heavy `build/` directory from the copy.
-- Prompts you to either keep the original board (`k`), change it, or leave it blank (`q`).
-- Opens the new project in VS Code automatically.
 
-### 3. Opening a Project in VS Code
-```bash
-zephyrproject -openproject <project-name>
-```
-**What it does:** 
-- Opens the specified project directly in Visual Studio Code.
-- If the project has a valid board selected, it automatically performs a clean `west build` to ensure intellisense and the build environment are up to date.
+---
 
-### 4. Building and Flashing
-Navigate to your project directory or use these commands directly via VS Code Tasks:
+## 📋 Full Command Reference
 
-- `zephyrproject -build` : Performs a standard `west build`.
-- `zephyrproject -clean` : Performs a pristine build (`west build -p always`).
-- `zephyrproject -flash` : Builds the project and flashes it to your connected board.
-- `zephyrproject -clean-flash` : Pristine build + flash.
-- `zephyrproject -flash-only` : Skips the build process and directly flashes the existing `zephyr.elf`.
+| Command | Description |
+| :--- | :--- |
+| `zephyrproject -newproject <name>` | Creates a minimal Zephyr project from scratch |
+| `zephyrproject -import-cube [path] [name]` | **(New)** Converts an STM32Cube project using Gemini AI |
+| `zephyrproject -copy <src> <dest>` | Duplicates an existing Zephyr project |
+| `zephyrproject -openproject <name>` | Opens project in VS Code with clean build |
+| `zephyrproject -show` | Lists all applications in workspace |
+| `zephyrproject -build` | Compiles the current application |
+| `zephyrproject -clean` | Performs a pristine rebuild (`--pristine`) |
+| `zephyrproject -flash` | Builds and flashes binary to the target board |
+| `zephyrproject -clean-flash` | Pristine rebuild and flash |
+| `zephyrproject -flash-only` | Flashes existing binary without rebuilding |
+| `zephyrproject -debug` | Starts GDB debugging session |
+| `zephyrproject -debugserver` | Starts OpenOCD GDB server |
+| `zephyrproject -menuconfig` | Launches interactive Kconfig menu |
+| `zephyrproject -pristine` | Deletes the `build/` directory |
+| `zephyrproject -status` | Displays project, board, and toolchain info |
+| `zephyrproject -delete <name>` | Permanently removes a project |
+| `zephyrproject -install-completion` | Installs Bash tab auto-completion |
+| `zephyrproject -help` | Displays help message |
 
-### 5. Debugging
-```bash
-zephyrproject -debug
-```
-**What it does:** 
-- Builds the project and starts the OpenOCD GDB server in your terminal.
-- Perfectly integrates with the VS Code `Cortex-Debug` extension (configured via the generated `launch.json`).
+---
 
-### 6. Managing Projects
-```bash
-zephyrproject -show
-```
-Lists all your active Zephyr projects located in the applications directory.
+## 🔒 Security & Privacy
 
-```bash
-zephyrproject -delete <project-name>
-```
-Safely deletes a project folder. Includes a `[y/N]` confirmation prompt to prevent accidental data loss.
-
-### 7. Serial Port Monitor
-```bash
-zephyrproject -monitor
-```
-**What it does:**
-- Automatically detects connected boards (e.g., `/dev/ttyACM0` or `/dev/ttyUSB0`).
-- Connects to the board's serial output at `115200` baud using `picocom`. (Requires `picocom` to be installed: `sudo apt-get install picocom`).
-
-### 8. Exporting/Packaging a Project
-```bash
-zephyrproject -export <project-name>
-```
-**What it does:**
-- Compresses the specified project into a `.tar.gz` archive.
-- Automatically excludes the massive `build/` folder and IDE cache files, reducing the size from gigabytes to kilobytes! Perfect for sharing your code with others.
-
-## Directory Structure Assumptions
-By default, the script looks for your workspace at `~/zephyrproject` and applications at `~/zephyrproject/applications`. 
-You can override these using environment variables:
-- `ZEPHYR_WORKSPACE`
-- `ZEPHYR_APPLICATIONS_DIR`
-- `ZEPHYR_VENV`
-
-## License
-
-MIT License
+* Your Google Gemini API key is stored locally in `~/.config/zephyrproject/gemini_api_key.txt` with `0600` permissions.
+* The script contains no hardcoded keys, passwords, or personal user paths.
