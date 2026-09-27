@@ -1278,8 +1278,7 @@ import_cube_project()
         py_bin="$ZEPHYR_VENV/bin/python3"
     fi
 
-    local py_success=0
-    if "$py_bin" - "$cube_dir" "$api_key" "$reasoning" "$temp_json" << 'EOF_PYTHON'
+    if ! "$py_bin" - "$cube_dir" "$api_key" "$reasoning" "$temp_json" << 'EOF_PYTHON'
 import os
 import sys
 import json
@@ -1376,10 +1375,14 @@ REQUIREMENTS:
 2. If delays (HAL_Delay) were used, replace with non-blocking k_msleep() or k_sleep().
 3. If FreeRTOS was used, translate tasks into Zephyr threads (k_thread_create or K_THREAD_DEFINE) and synchronization objects (k_sem, k_msgq, etc.).
 4. Identify the closest standard Zephyr board target (e.g. nucleo_f446re, nucleo_f303re, nucleo_l476rg, etc.).
-5. Produce complete, working src/main.c.
-6. Produce complete prj.conf with necessary CONFIG_* options enabled.
-7. Produce app.overlay if devicetree overrides are necessary (otherwise empty string).
-8. Provide a concise summary of the conversion.
+5. DEVICETREE RULES:
+   - In Zephyr, the primary board LED is always aliased as 'led0' (DT_ALIAS(led0)), even if STM32 BSP named it LED2/LD2. Do NOT invent 'led2'.
+   - The primary board button is always aliased as 'sw0' (DT_ALIAS(sw0)).
+   - Do NOT add aliases in app.overlay for led0 or sw0 since standard Zephyr boards already define them in their board DTS.
+6. Produce complete, working src/main.c.
+7. Produce complete prj.conf with necessary CONFIG_* options enabled.
+8. Produce app.overlay ONLY if custom non-standard pin/node overrides are necessary (otherwise leave as empty string "").
+9. Provide a concise summary of the conversion.
 
 Respond strictly with a JSON object with these exact keys:
 {{
@@ -1390,57 +1393,49 @@ Respond strictly with a JSON object with these exact keys:
   "summary": "<string: conversion summary and notes>"
 }}
 """
+import time
 
-models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+models = ["gemini-3.8-flash", "gemini-3.1-flash-lite", "gemini-flash-latest", "gemini-2.5-flash-lite"]
 response_json = None
 last_error = ""
 
 for model in models:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"responseMimeType": "application/json"}
-    }
-    if "2.5" in model and thinking_budget > 0:
-        payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": thinking_budget}
+    attempts = [True, False] if thinking_budget > 0 else [False]
 
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"}
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            candidate = data.get("candidates", [{}])[0]
-            parts = candidate.get("content", {}).get("parts", [{}])
-            text = "".join([p.get("text", "") for p in parts])
-            response_json = json.loads(text)
-            break
-    except urllib.error.HTTPError as e:
-        err_msg = e.read().decode("utf-8", errors="ignore")
-        last_error = f"HTTP {e.code}: {err_msg}"
-        if "thinkingConfig" in err_msg and "generationConfig" in payload and "thinkingConfig" in payload["generationConfig"]:
-            del payload["generationConfig"]["thinkingConfig"]
-            try:
-                req2 = urllib.request.Request(
-                    url,
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={"Content-Type": "application/json"}
-                )
-                with urllib.request.urlopen(req2, timeout=90) as resp2:
-                    data = json.loads(resp2.read().decode("utf-8"))
-                    candidate = data.get("candidates", [{}])[0]
-                    parts = candidate.get("content", {}).get("parts", [{}])
-                    text = "".join([p.get("text", "") for p in parts])
-                    response_json = json.loads(text)
-                    break
-            except Exception as e2:
-                last_error = str(e2)
-        continue
-    except Exception as e:
-        last_error = str(e)
-        continue
+    for use_thinking in attempts:
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json"}
+        }
+        if use_thinking:
+            payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": thinking_budget}
+
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                candidate = data.get("candidates", [{}])[0]
+                parts = candidate.get("content", {}).get("parts", [{}])
+                text = "".join([p.get("text", "") for p in parts if "text" in p])
+                response_json = json.loads(text)
+                break
+        except urllib.error.HTTPError as e:
+            err_msg = e.read().decode("utf-8", errors="ignore")
+            last_error = f"{model} (HTTP {e.code}): {err_msg}"
+            if e.code == 503 or e.code == 429:
+                time.sleep(2)
+            continue
+        except Exception as e:
+            last_error = f"{model}: {str(e)}"
+            continue
+
+    if response_json:
+        break
 
 if not response_json:
     print(f"Error calling Gemini API: {last_error}", file=sys.stderr)
@@ -1888,9 +1883,16 @@ run_flash()
 
     info "Flashing board..."
 
+    local extra_args=()
+    local current_board="$(get_board)"
+    if [[ "$current_board" =~ (nucleo|stm32) ]]; then
+        extra_args+=(-- --cmd-pre-init "adapter speed 1800" --cmd-pre-init "reset_config none")
+    fi
+
     west flash \
         --build-dir "$PROJECT_DIR/$BUILD_DIR" \
-        -r openocd
+        -r openocd \
+        "${extra_args[@]}"
 
     success "Flash completed."
 }
