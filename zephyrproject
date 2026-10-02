@@ -1282,11 +1282,34 @@ run_flash()
 
     info "Flashing board..."
 
-    west flash \
-        --build-dir "$PROJECT_DIR/$BUILD_DIR" \
-        -r openocd
+    if west flash --build-dir "$PROJECT_DIR/$BUILD_DIR" -r openocd; then
+        success "Flash completed."
+    else
+        warning "openocd failed. Trying pyocd instead..."
+        
+        if ! command -v pyocd >/dev/null 2>&1; then
+            question "pyocd is not installed. Do you want to install it with pip? [y/N]: "
+            read -r confirm
+            if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+                info "Installing pyocd..."
+                pip install pyocd
+            else
+                info "pyocd installation cancelled."
+                info "Recommendation: You can flash manually using other supported runners like stm32cubeprogrammer."
+                info "Example: west flash -r stm32cubeprogrammer"
+                exit 1
+            fi
+        fi
 
-    success "Flash completed."
+        info "Flashing with pyocd..."
+        if west flash --build-dir "$PROJECT_DIR/$BUILD_DIR" -r pyocd; then
+            success "Flash completed with pyocd."
+        else
+            error "Flash with pyocd also failed."
+            info "Recommendation: Try other runners like stm32cubeprogrammer or jlink."
+            exit 1
+        fi
+    fi
 }
 
 # ============================================================
@@ -1387,6 +1410,15 @@ show_status()
 # ============================================================
 
 ACTION="${1:--help}"
+
+if [[ "$ACTION" != "-help" && "$ACTION" != "--help" && "$ACTION" != "-h" && "$ACTION" != "-install-completion" ]]; then
+    if [[ ! -d "$ZEPHYR_WORKSPACE" ]]; then
+        error "Zephyr workspace directory not found: $ZEPHYR_WORKSPACE"
+        info "To fix this, set the ZEPHYR_WORKSPACE environment variable in your ~/.bashrc"
+        info "Example: export ZEPHYR_WORKSPACE=/path/to/your/zephyrproject"
+        exit 1
+    fi
+fi
 
 case "$ACTION" in
 

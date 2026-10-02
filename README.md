@@ -10,6 +10,8 @@ A powerful, plug-and-play command-line utility for streamlining Zephyr RTOS proj
 - **Dynamic GDB Resolution**: Automatically finds your `arm-zephyr-eabi-gdb` path and Zephyr SDK regardless of version or installation directory.
 - **Bash Auto-Completion**: Includes a robust auto-completion system for project names and commands.
 - **Safe Deletion**: Easily clean up development environments with the built-in safe delete function.
+- **Smart Runner Fallback**: Automatically attempts flashing with `pyocd` if `openocd` fails or is unsupported, including a one-click pyOCD installation prompt.
+- **Environment Validation**: Actively checks for the existence of your `ZEPHYR_WORKSPACE` before executing commands, providing clear instructions for setting environment variables if misplaced.
 
 ## Installation
 
