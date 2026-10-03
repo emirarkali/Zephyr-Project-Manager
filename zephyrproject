@@ -667,12 +667,29 @@ scaffold_app()
         : > "$dest_dir/board.txt"
     else
         mkdir -p "$dest_dir/src"
+        mkdir -p "$dest_dir/include"
         mkdir -p "$dest_dir/boards"
+
+        cat > "$dest_dir/Kconfig" <<'EOF_KCONF'
+# Zephyr Application Kconfig
+
+mainmenu "Application Configuration"
+
+source "Kconfig.zephyr"
+
+# Add application-specific configurations here
+# config APP_MY_FEATURE
+#     bool "Enable my custom feature"
+#     default n
+EOF_KCONF
+
 
         cat > "$dest_dir/CMakeLists.txt" <<EOF_CMAKE
 cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS \$ENV{ZEPHYR_BASE})
 project($cmake_app_name)
+
+target_include_directories(app PRIVATE include)
 target_sources(app PRIVATE src/main.c)
 EOF_CMAKE
 
