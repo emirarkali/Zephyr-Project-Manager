@@ -85,7 +85,11 @@ Zephyr Project Helper
 
 Usage:
 
-  zephyrproject -newproject "project-name" [-sample]
+  zephyrproject -newproject "project-name" [-sample] [-multi]
+      Creates a new Zephyr project. If -multi is given, creates a multi-app workspace.
+
+  zephyrproject -addapp "app-name" [-sample]
+      Adds a new app to a multi-app workspace.
       Creates a new Zephyr project. If -sample is provided, you can interactively
       select and copy one of the basic sample projects.
       Otherwise, it creates a minimal project from scratch.
@@ -600,49 +604,33 @@ update_cmake_project_name()
     fi
 }
 
+
 # ============================================================
-# NEW PROJECT
+# APP CREATION LOGIC
 # ============================================================
 
-create_new_project()
+scaffold_app()
 {
-    local project_name="$1"
-    local sample_path="${2:-}"
-    local destination="$APPLICATIONS_DIR/$project_name"
-    local cmake_project_name="${project_name//-/_}"
-
-    validate_project_name "$project_name"
-
-    check_command mkdir
-    check_command cat
-
-    if [[ ! -d "$APPLICATIONS_DIR" ]]; then
-        error "Applications folder not found:"
-        error "$APPLICATIONS_DIR"
-        exit 1
-    fi
-
-    if [[ -e "$destination" ]]; then
-        error "A file or folder with this name already exists:"
-        error "$destination"
-        exit 1
-    fi
-
+    local dest_dir="$1"
+    local app_name="$2"
+    local sample_path="${3:-}"
+    
+    local cmake_app_name="${app_name//-/_}"
     local selected_sample=""
+    
     if [[ "$sample_path" == "-sample" ]]; then
         echo
         echo "------------------------------------------------------------"
-        echo "Sample Selection"
+        echo "Sample Selection for App: $app_name"
         echo "------------------------------------------------------------"
         echo
         echo "Select a sample project to copy:"
-        echo
         echo "  1) hello_world"
         echo "  2) blinky"
         echo "  3) button"
         echo "  4) fade_led"
         echo "  5) philosophers"
-        echo "  q) Quit / No sample (minimal project)"
+        echo "  q) Quit / No sample (minimal app)"
         echo
         while true; do
             question "Select [1-5 or q]: "
@@ -658,15 +646,8 @@ create_new_project()
             esac
         done
     elif [[ -n "$sample_path" ]]; then
-        # Backwards compatibility or direct path
         selected_sample="$sample_path"
     fi
-
-    # West is required for board check
-    activate_venv
-
-    info "Creating new Zephyr project..."
-    info "Target: $destination"
 
     if [[ -n "$selected_sample" ]]; then
         local sample_dir="$ZEPHYR_WORKSPACE/zephyr/samples/$selected_sample"
@@ -675,135 +656,116 @@ create_new_project()
             exit 1
         fi
         
-        info "Copying sample: $selected_sample"
-        mkdir -p "$destination"
-        cp -a "$sample_dir/." "$destination/"
+        info "Copying sample: $selected_sample to $dest_dir"
+        mkdir -p "$dest_dir"
+        cp -a "$sample_dir/." "$dest_dir/"
         
-        mkdir -p "$destination/boards"
-        mkdir -p "$destination/.vscode"
+        mkdir -p "$dest_dir/boards"
+        rm -rf -- "$dest_dir/build" 2>/dev/null || true
         
-        rm -rf -- "$destination/build"
-        
-        update_cmake_project_name "$destination/CMakeLists.txt" "$project_name"
-        
-        : > "$destination/board.txt"
+        update_cmake_project_name "$dest_dir/CMakeLists.txt" "$app_name"
+        : > "$dest_dir/board.txt"
     else
-        # --------------------------------------------------------
-        # Folders
-        # --------------------------------------------------------
+        mkdir -p "$dest_dir/src"
+        mkdir -p "$dest_dir/boards"
 
-        mkdir -p "$destination/src"
-        mkdir -p "$destination/boards"
-        mkdir -p "$destination/.vscode"
-
-        # --------------------------------------------------------
-        # CMakeLists.txt
-        # --------------------------------------------------------
-
-        cat > "$destination/CMakeLists.txt" <<EOF
+        cat > "$dest_dir/CMakeLists.txt" <<EOF_CMAKE
 cmake_minimum_required(VERSION 3.20.0)
-
 find_package(Zephyr REQUIRED HINTS \$ENV{ZEPHYR_BASE})
+project($cmake_app_name)
+target_sources(app PRIVATE src/main.c)
+EOF_CMAKE
 
-project($cmake_project_name)
-
-target_sources(app PRIVATE
-    src/main.c
-)
-EOF
-
-        # --------------------------------------------------------
-        # prj.conf
-        # --------------------------------------------------------
-
-        cat > "$destination/prj.conf" <<'EOF'
-# ============================================================
+        cat > "$dest_dir/prj.conf" <<'EOF_CONF'
 # Zephyr Project Configuration
-# ============================================================
-
-# Console / printk
 CONFIG_PRINTK=y
-
-# Assertions
 CONFIG_ASSERT=y
-
-# Logging
 CONFIG_LOG=y
 CONFIG_LOG_DEFAULT_LEVEL=3
-
-# Main thread stack
 CONFIG_MAIN_STACK_SIZE=2048
+EOF_CONF
 
-# ------------------------------------------------------------
-# Add project-specific configuration below
-# ------------------------------------------------------------
-EOF
+        : > "$dest_dir/board.txt"
 
-
-        # --------------------------------------------------------
-        # board.txt
-        #
-        # MUST be created from scratch in every new project.
-        # --------------------------------------------------------
-
-        : > "$destination/board.txt"
-
-        # --------------------------------------------------------
-        # main.c
-        # --------------------------------------------------------
-
-        cat > "$destination/src/main.c" <<'EOF'
+        cat > "$dest_dir/src/main.c" <<'EOF_MAIN'
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 
 int main(void)
 {
     printk("Zephyr application started.\n");
-
     while (1) {
-
-        /*
-         * Application code
-         */
-
         k_sleep(K_SECONDS(1));
     }
-
     return 0;
 }
-EOF
+EOF_MAIN
     fi
 
-    # --------------------------------------------------------
-    # app.overlay (ensure it exists)
-    # --------------------------------------------------------
-
-    if [[ ! -f "$destination/app.overlay" ]]; then
-        cat > "$destination/app.overlay" <<'EOF'
+    if [[ ! -f "$dest_dir/app.overlay" ]]; then
+        cat > "$dest_dir/app.overlay" <<'EOF_OV'
 /*
  * Zephyr Devicetree Overlay
- *
- * Add project-specific devicetree configuration here.
  */
-EOF
+EOF_OV
+    fi
+}
+
+# ============================================================
+# NEW PROJECT
+# ============================================================
+
+
+create_new_project()
+{
+    local project_name="$1"
+    local arg2="${2:-}"
+    local arg3="${3:-}"
+    local destination="$APPLICATIONS_DIR/$project_name"
+    
+    local is_multi=0
+    local sample_path=""
+    
+    if [[ "$arg2" == "-multi" || "$arg3" == "-multi" ]]; then
+        is_multi=1
+    fi
+    if [[ "$arg2" == "-sample" || "$arg2" != "-multi" && -n "$arg2" ]]; then
+        sample_path="$arg2"
+    elif [[ "$arg3" == "-sample" ]]; then
+        sample_path="$arg3"
     fi
 
-    # --------------------------------------------------------
-    # .gitignore
-    # --------------------------------------------------------
+    validate_project_name "$project_name"
 
-    cat > "$destination/.gitignore" <<'EOF'
+    check_command mkdir
+    check_command cat
+
+    if [[ ! -d "$APPLICATIONS_DIR" ]]; then
+        error "Applications folder not found: $APPLICATIONS_DIR"
+        exit 1
+    fi
+
+    if [[ -e "$destination" ]]; then
+        error "A file or folder with this name already exists: $destination"
+        exit 1
+    fi
+
+    activate_venv
+
+    info "Creating new Zephyr project..."
+    info "Target: $destination"
+
+    mkdir -p "$destination"
+    mkdir -p "$destination/.vscode"
+    
+    cat > "$destination/.gitignore" <<'EOF_GIT'
 build/
 .vscode/*.log
 *.swp
 *~
-EOF
+EOF_GIT
 
-    # ========================================================
-    # VS CODE TASKS
-    # ========================================================
-
-    cat > "$destination/.vscode/tasks.json" <<'EOF'
+    cat > "$destination/.vscode/tasks.json" <<'EOF_TASKS'
 {
     "version": "2.0.0",
     "tasks": [
@@ -900,11 +862,7 @@ EOF
         }
     ]
 }
-EOF
-
-    # ========================================================
-    # VS CODE LAUNCH
-    # ========================================================
+EOF_TASKS
 
     local DYNAMIC_GDB_PATH="\${env:HOME}/zephyr-sdk-1.0.1/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb"
     if [[ -n "${ZEPHYR_SDK_INSTALL_DIR:-}" ]]; then
@@ -920,7 +878,7 @@ EOF
         fi
     fi
 
-    cat > "$destination/.vscode/launch.json" <<EOF
+    cat > "$destination/.vscode/launch.json" <<EOF_LAUNCH
 {
     "version": "0.2.0",
     "configurations": [
@@ -928,143 +886,91 @@ EOF
             "name": "Zephyr: Build and Debug",
             "type": "cortex-debug",
             "request": "launch",
-
             "cwd": "\${workspaceFolder}",
-
             "executable": "\${workspaceFolder}/build/zephyr/zephyr.elf",
-
             "servertype": "external",
             "gdbTarget": "localhost:3333",
-
             "gdbPath": "${DYNAMIC_GDB_PATH}",
-
             "preLaunchTask": "Zephyr: Start OpenOCD Server",
-
             "runToEntryPoint": "main",
-
             "device": "",
             "interface": "swd",
-
             "showDevDebugOutput": "raw"
         }
     ]
 }
-EOF
+EOF_LAUNCH
 
-    # --------------------------------------------------------
-    # PROJECT_INFO.md
-    # --------------------------------------------------------
-
-    cat > "$destination/PROJECT_INFO.md" <<EOF
+    cat > "$destination/PROJECT_INFO.md" <<EOF_INFO
 # $project_name
 
-Minimal Zephyr application.
+Zephyr application workspace.
+EOF_INFO
 
-## Board
-
-Board configuration is stored in:
-
-\`\`\`text
-board.txt
-\`\`\`
-
-Example:
-
-\`\`\`text
-nucleo_f303re
-\`\`\`
-
-## Build
-
-\`\`\`bash
-zephyrproject -build
-\`\`\`
-
-## Clean Build
-
-\`\`\`bash
-zephyrproject -clean
-\`\`\`
-
-## Build and Flash
-
-\`\`\`bash
-zephyrproject -flash
-\`\`\`
-
-## Clean Build and Flash
-
-\`\`\`bash
-zephyrproject -clean-flash
-\`\`\`
-
-## Flash Only
-
-\`\`\`bash
-zephyrproject -flash-only
-\`\`\`
-
-## Debug
-
-\`\`\`bash
-zephyrproject -debug
-\`\`\`
-EOF
-
-    # --------------------------------------------------------
-    # Board Selection
-    # --------------------------------------------------------
-
-    select_board_for_new_project "$destination"
+    if [[ $is_multi -eq 1 ]]; then
+        mkdir -p "$destination/apps"
+        info "Multi-app workspace created. Use '-addapp' to create apps."
+        
+        question "Do you want to create the first app now? [y/N]: "
+        read -r create_app_now
+        if [[ "$create_app_now" == "y" || "$create_app_now" == "Y" ]]; then
+            question "Enter app name (e.g. main_node): "
+            read -r first_app
+            if [[ -n "$first_app" ]]; then
+                scaffold_app "$destination/apps/$first_app" "$first_app" "$sample_path"
+                select_board_for_new_project "$destination/apps/$first_app"
+            fi
+        fi
+    else
+        scaffold_app "$destination" "$project_name" "$sample_path"
+        select_board_for_new_project "$destination"
+    fi
 
     PROJECT_DIR="$destination"
-
+    APP_DIR="$destination"
     sync_launch_json
 
     success "Project files created."
-
-    echo
-    echo "Project:"
-    echo "  $destination"
-    echo
-
-    if [[ -n "$(get_board)" ]]; then
-        echo "Board:"
-        echo "  $(get_board)"
-    else
-        echo "Board:"
-        echo "  <not selected>"
-    fi
-
-    echo
-
-    # --------------------------------------------------------
-    # Open VS Code
-    # --------------------------------------------------------
-
+    
     if command -v code >/dev/null 2>&1; then
-
         info "Opening new project in VS Code..."
         code "$destination"
-
-    else
-
-        warning "VS Code 'code' command not found."
-        warning "Open manually:"
-        warning "code \"$destination\""
     fi
+}
 
-    # --------------------------------------------------------
-    # NO AUTOMATIC BUILD FOR NEW PROJECT
-    # --------------------------------------------------------
+# ------------------------------------------------------------
+# ADD APP
+# ------------------------------------------------------------
 
-    info "Automatic build skipped for new project."
-
-    if [[ -z "$(get_board)" ]]; then
-        warning "Fill board.txt before building."
+add_app_to_project()
+{
+    local app_name="$1"
+    local sample_path="${2:-}"
+    
+    validate_project_name "$app_name"
+    
+    if [[ ! -d "$PROJECT_DIR" ]]; then
+        error "Must run inside a project directory."
+        exit 1
     fi
-
-    success "New project is ready."
+    
+    mkdir -p "$PROJECT_DIR/apps"
+    local app_dest="$PROJECT_DIR/apps/$app_name"
+    
+    if [[ -e "$app_dest" ]]; then
+        error "App already exists: $app_dest"
+        exit 1
+    fi
+    
+    activate_venv
+    
+    info "Creating new app in workspace: $app_name"
+    scaffold_app "$app_dest" "$app_name" "$sample_path"
+    
+    select_board_for_new_project "$app_dest"
+    
+    success "App '$app_name' created successfully."
+    info "Run 'zephyrproject -build $app_name' to build it."
 }
 
 # ============================================================
@@ -1515,6 +1421,16 @@ case "$ACTION" in
     # --------------------------------------------------------
     # New Project
     # --------------------------------------------------------
+
+
+    -addapp)
+        if [[ $# -lt 2 || $# -gt 3 ]]; then
+            error "Invalid arguments for add app."
+            error 'Example: zephyrproject -addapp "traction" [-sample]'
+            exit 1
+        fi
+        add_app_to_project "$2" "${3:-}"
+        ;;
 
     -newproject)
 
