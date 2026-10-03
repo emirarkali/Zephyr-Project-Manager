@@ -1385,11 +1385,11 @@ show_status()
 
     echo
 
-    if [[ -f "$PROJECT_DIR/$BUILD_DIR/zephyr/zephyr.elf" ]]; then
+    if [[ -f "$APP_DIR/$BUILD_DIR/zephyr/zephyr.elf" ]]; then
 
         success "zephyr.elf exists."
 
-        ls -lh "$PROJECT_DIR/$BUILD_DIR/zephyr/zephyr.elf"
+        ls -lh "$APP_DIR/$BUILD_DIR/zephyr/zephyr.elf"
 
     else
 
