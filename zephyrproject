@@ -85,8 +85,8 @@ Zephyr Project Helper
 
 Usage:
 
-  zephyrproject -newproject "project-name" [-sample] [-multi]
-      Creates a new Zephyr project. If -multi is given, creates a multi-app workspace.
+  zephyrproject -newproject "project-name" [-sample] 
+      Creates a new multi-app Zephyr project (prompts for project and app names).
 
   zephyrproject -addapp "app-name" [-sample]
       Adds a new app to a multi-app workspace.
@@ -719,23 +719,33 @@ EOF_OV
 create_new_project()
 {
     local project_name="$1"
-    local arg2="${2:-}"
-    local arg3="${3:-}"
-    local destination="$APPLICATIONS_DIR/$project_name"
+    local sample_path="$2"
     
-    local is_multi=0
-    local sample_path=""
-    
-    if [[ "$arg2" == "-multi" || "$arg3" == "-multi" ]]; then
-        is_multi=1
+    if [[ "$project_name" == "-sample" ]]; then
+        sample_path="-sample"
+        project_name=""
     fi
-    if [[ "$arg2" == "-sample" || "$arg2" != "-multi" && -n "$arg2" ]]; then
-        sample_path="$arg2"
-    elif [[ "$arg3" == "-sample" ]]; then
-        sample_path="$arg3"
+    
+    echo
+    echo "============================================================"
+    echo "Create New Multi-App Zephyr Project"
+    echo "============================================================"
+    echo
+    
+    if [[ -z "$project_name" ]]; then
+        while true; do
+            question "Enter Project (Workspace) Name: "
+            read -r project_name
+            if [[ -n "$project_name" ]]; then
+                break
+            else
+                warning "Project name cannot be empty."
+            fi
+        done
     fi
 
     validate_project_name "$project_name"
+    local destination="$APPLICATIONS_DIR/$project_name"
 
     check_command mkdir
     check_command cat
@@ -752,7 +762,7 @@ create_new_project()
 
     activate_venv
 
-    info "Creating new Zephyr project..."
+    info "Creating new multi-app Zephyr project..."
     info "Target: $destination"
 
     mkdir -p "$destination"
@@ -907,30 +917,29 @@ EOF_LAUNCH
 Zephyr application workspace.
 EOF_INFO
 
-    if [[ $is_multi -eq 1 ]]; then
-        mkdir -p "$destination/apps"
-        info "Multi-app workspace created. Use '-addapp' to create apps."
-        
-        question "Do you want to create the first app now? [y/N]: "
-        read -r create_app_now
-        if [[ "$create_app_now" == "y" || "$create_app_now" == "Y" ]]; then
-            question "Enter app name (e.g. main_node): "
-            read -r first_app
-            if [[ -n "$first_app" ]]; then
-                scaffold_app "$destination/apps/$first_app" "$first_app" "$sample_path"
-                select_board_for_new_project "$destination/apps/$first_app"
-            fi
+    mkdir -p "$destination/apps"
+    info "Multi-app workspace created."
+    
+    local first_app=""
+    echo
+    while true; do
+        question "Enter the name of your first app (e.g. main_node): "
+        read -r first_app
+        if [[ -n "$first_app" ]]; then
+            break
+        else
+            warning "App name cannot be empty."
         fi
-    else
-        scaffold_app "$destination" "$project_name" "$sample_path"
-        select_board_for_new_project "$destination"
-    fi
+    done
+    
+    scaffold_app "$destination/apps/$first_app" "$first_app" "$sample_path"
+    select_board_for_new_project "$destination/apps/$first_app"
 
     PROJECT_DIR="$destination"
-    APP_DIR="$destination"
+    APP_DIR="$destination/apps/$first_app"
     sync_launch_json
 
-    success "Project files created."
+    success "Project and initial app created."
     
     if command -v code >/dev/null 2>&1; then
         info "Opening new project in VS Code..."
@@ -1433,18 +1442,12 @@ case "$ACTION" in
         ;;
 
     -newproject)
-
-        if [[ $# -lt 2 || $# -gt 3 ]]; then
-
+        if [[ $# -gt 3 ]]; then
             error "Invalid arguments for new project."
-            error
-            error 'Example:'
-            error 'zephyrproject -newproject "uart_test" [-sample]'
-
+            error 'Example: zephyrproject -newproject ["project_name"] [-sample]'
             exit 1
         fi
-
-        create_new_project "$2" "${3:-}"
+        create_new_project "${2:-}" "${3:-}"
         ;;
 
     # --------------------------------------------------------
