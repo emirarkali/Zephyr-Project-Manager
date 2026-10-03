@@ -34,16 +34,26 @@ This tool is designed around a simple, interactive workflow. You don't need to m
 
 ### 1. Creating a New Project
 ```bash
-zephyrproject -newproject <project-name> [-sample]
+zephyrproject -newproject [project-name] [-sample]
 ```
-**What it does:** 
-- Creates a new Zephyr application folder under `~/zephyrproject/applications/`.
-- If `-sample` is provided, it interactively prompts you to select and copy one of the basic sample projects from Zephyr's built-in samples.
-- Otherwise, it generates a clean template `CMakeLists.txt`, `prj.conf`, and `src/main.c`.
+**What it does:**
+- Creates a new multi-app Zephyr workspace under `~/zephyrproject/applications/`.
+- If no `[project-name]` is provided, it launches an interactive wizard to ask for it.
+- Automatically asks for the name of your first application (e.g. `main_node`, `traction`).
+- Sets up a robust directory structure (`apps/app_name/`) including auto-generated `include/` and `Kconfig` files.
 - **Interactive Board Selection:** It will prompt you to type your target board name (e.g., `nucleo_f303re`). It validates the board against the official Zephyr list to prevent typos!
 - Configures `.vscode/launch.json` dynamically, automatically locating your local `arm-zephyr-eabi-gdb` path.
 
-### 2. Copying/Duplicating a Project
+### 2. Adding a New App to a Project
+```bash
+zephyrproject -addapp <app-name> [-sample]
+```
+**What it does:**
+- Run this inside your project workspace to scaffold a brand new Zephyr app.
+- Creates `apps/<app-name>/` with its own dedicated `CMakeLists.txt`, `board.txt`, `prj.conf`, `Kconfig` and `include/` directory.
+- Interactively asks for the board selection for this specific app.
+
+### 3. Copying/Duplicating a Project
 ```bash
 zephyrproject -copy <source-project> <new-project>
 ```
@@ -53,7 +63,7 @@ zephyrproject -copy <source-project> <new-project>
 - Prompts you to either keep the original board (`k`), change it, or leave it blank (`q`).
 - Opens the new project in VS Code automatically.
 
-### 3. Opening a Project in VS Code
+### 4. Opening a Project in VS Code
 ```bash
 zephyrproject -openproject <project-name>
 ```
@@ -61,16 +71,18 @@ zephyrproject -openproject <project-name>
 - Opens the specified project directly in Visual Studio Code.
 - If the project has a valid board selected, it automatically performs a clean `west build` to ensure intellisense and the build environment are up to date.
 
-### 4. Building and Flashing
+### 5. Building and Flashing
 Navigate to your project directory or use these commands directly via VS Code Tasks:
 
-- `zephyrproject -build` : Performs a standard `west build`.
-- `zephyrproject -clean` : Performs a pristine build (`west build -p always`).
-- `zephyrproject -flash` : Builds the project and flashes it to your connected board.
-- `zephyrproject -clean-flash` : Pristine build + flash.
-- `zephyrproject -flash-only` : Skips the build process and directly flashes the existing `zephyr.elf`.
+- `zephyrproject -build [app-name]` : Performs a standard `west build` for the specified app.
+- `zephyrproject -clean [app-name]` : Performs a pristine build (`west build -p always`).
+- `zephyrproject -flash [app-name]` : Builds the project and flashes it to your connected board.
+- `zephyrproject -clean-flash [app-name]` : Pristine build + flash.
+- `zephyrproject -flash-only [app-name]` : Skips the build process and directly flashes the existing `zephyr.elf`.
 
-### 5. Debugging
+*Note: If you have a multi-app workspace and omit `[app-name]`, the CLI will interactively ask you which app to build/flash.*
+
+### 6. Debugging
 ```bash
 zephyrproject -debug
 ```
@@ -78,7 +90,7 @@ zephyrproject -debug
 - Builds the project and starts the OpenOCD GDB server in your terminal.
 - Perfectly integrates with the VS Code `Cortex-Debug` extension (configured via the generated `launch.json`).
 
-### 6. Managing Projects
+### 7. Managing Projects
 ```bash
 zephyrproject -show
 ```
@@ -89,7 +101,7 @@ zephyrproject -delete <project-name>
 ```
 Safely deletes a project folder. Includes a `[y/N]` confirmation prompt to prevent accidental data loss.
 
-### 7. Serial Port Monitor
+### 8. Serial Port Monitor
 ```bash
 zephyrproject -monitor
 ```
@@ -97,7 +109,7 @@ zephyrproject -monitor
 - Automatically detects connected boards (e.g., `/dev/ttyACM0` or `/dev/ttyUSB0`).
 - Connects to the board's serial output at `115200` baud using `picocom`. (Requires `picocom` to be installed: `sudo apt-get install picocom`).
 
-### 8. Exporting/Packaging a Project
+### 9. Exporting/Packaging a Project
 ```bash
 zephyrproject -export <project-name>
 ```
