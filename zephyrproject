@@ -17,6 +17,7 @@ ZEPHYR_VENV="${ZEPHYR_VENV:-$ZEPHYR_WORKSPACE/.venv}"
 BUILD_DIR="${ZEPHYR_BUILD_DIR:-build}"
 
 PROJECT_DIR="$PWD"
+APP_DIR="$PROJECT_DIR"
 
 # ------------------------------------------------------------
 # Colors
@@ -165,6 +166,74 @@ EOF
 }
 
 # ------------------------------------------------------------
+# ------------------------------------------------------------
+# App Directory Resolution
+# ------------------------------------------------------------
+
+resolve_app_dir()
+{
+    local app_arg="${1:-}"
+
+    if [[ -n "$app_arg" ]]; then
+        if [[ -d "$PROJECT_DIR/apps/$app_arg" ]]; then
+            APP_DIR="$PROJECT_DIR/apps/$app_arg"
+        elif [[ -d "$PROJECT_DIR/$app_arg" ]]; then
+            APP_DIR="$PROJECT_DIR/$app_arg"
+        else
+            error "App not found: $app_arg"
+            exit 1
+        fi
+    else
+        if [[ -d "$PROJECT_DIR/apps" ]] && [[ -n "$(ls -A "$PROJECT_DIR/apps" 2>/dev/null)" ]]; then
+            local apps=()
+            for app in "$PROJECT_DIR/apps/"*; do
+                if [[ -d "$app" && -f "$app/CMakeLists.txt" ]]; then
+                    apps+=("$(basename "$app")")
+                fi
+            done
+
+            if [[ ${#apps[@]} -eq 0 ]]; then
+                APP_DIR="$PROJECT_DIR"
+            elif [[ ${#apps[@]} -eq 1 ]]; then
+                APP_DIR="$PROJECT_DIR/apps/${apps[0]}"
+                info "Auto-selected app: ${apps[0]}"
+            else
+                if [[ ! -t 0 ]]; then
+                    error "Multiple apps found but not interactive. Specify app name."
+                    exit 1
+                fi
+
+                echo
+                echo "This project contains multiple apps. Please select one:"
+                for idx in "${!apps[@]}"; do
+                    echo "  $((idx+1))) ${apps[$idx]}"
+                done
+                echo "  q) Quit"
+                echo
+
+                while true; do
+                    question "Select app [1-${#apps[@]}]: "
+                    read -r app_choice
+
+                    if [[ "$app_choice" == "q" || "$app_choice" == "Q" ]]; then
+                        error "Operation cancelled."
+                        exit 1
+                    fi
+
+                    if [[ "$app_choice" =~ ^[0-9]+$ ]] && (( app_choice >= 1 && app_choice <= ${#apps[@]} )); then
+                        APP_DIR="$PROJECT_DIR/apps/${apps[$((app_choice-1))]}"
+                        break
+                    else
+                        warning "Invalid selection."
+                    fi
+                done
+            fi
+        else
+            APP_DIR="$PROJECT_DIR"
+        fi
+    fi
+}
+
 # General checks
 # ------------------------------------------------------------
 
@@ -189,30 +258,30 @@ sync_launch_json()
     fi
 }
 
-check_project()
+check_app()
 {
-    if [[ ! -f "$PROJECT_DIR/CMakeLists.txt" ]]; then
+    if [[ ! -f "$APP_DIR/CMakeLists.txt" ]]; then
         error "CMakeLists.txt not found in this folder:"
-        error "$PROJECT_DIR"
+        error "$APP_DIR"
         error "Run the command in the Zephyr application root folder."
         exit 1
     fi
 
-    if [[ ! -d "$PROJECT_DIR/src" ]]; then
+    if [[ ! -d "$APP_DIR/src" ]]; then
         error "src folder not found:"
-        error "$PROJECT_DIR/src"
+        error "$APP_DIR/src"
         exit 1
     fi
 
-    if [[ ! -f "$PROJECT_DIR/src/main.c" ]]; then
+    if [[ ! -f "$APP_DIR/src/main.c" ]]; then
         warning "src/main.c not found."
     fi
 
-    if [[ ! -f "$PROJECT_DIR/prj.conf" ]]; then
+    if [[ ! -f "$APP_DIR/prj.conf" ]]; then
         warning "prj.conf not found."
     fi
 
-    if [[ ! -f "$PROJECT_DIR/board.txt" ]]; then
+    if [[ ! -f "$APP_DIR/board.txt" ]]; then
         warning "board.txt not found."
     fi
 
@@ -250,8 +319,8 @@ activate_venv()
 
 get_board()
 {
-    if [[ -f "$PROJECT_DIR/board.txt" ]]; then
-        tr -d '[:space:]' < "$PROJECT_DIR/board.txt"
+    if [[ -f "$APP_DIR/board.txt" ]]; then
+        tr -d '[:space:]' < "$APP_DIR/board.txt"
     else
         echo ""
     fi
@@ -1174,10 +1243,10 @@ stop_old_openocd()
 
 check_build_output()
 {
-    if [[ ! -f "$PROJECT_DIR/$BUILD_DIR/zephyr/zephyr.elf" ]]; then
+    if [[ ! -f "$APP_DIR/$BUILD_DIR/zephyr/zephyr.elf" ]]; then
 
         error "Build output not found:"
-        error "$PROJECT_DIR/$BUILD_DIR/zephyr/zephyr.elf"
+        error "$APP_DIR/$BUILD_DIR/zephyr/zephyr.elf"
         error "Perform build operation first."
 
         exit 1
@@ -1213,7 +1282,7 @@ run_build()
         error "Board not selected."
         error
         error "board.txt file is empty:"
-        error "$PROJECT_DIR/board.txt"
+        error "$APP_DIR/board.txt"
         error
         error "Example:"
         error "echo 'nucleo_f303re' > board.txt"
@@ -1228,7 +1297,7 @@ run_build()
     local args=(
         west
         build
-        --build-dir "$PROJECT_DIR/$BUILD_DIR"
+        --build-dir "$APP_DIR/$BUILD_DIR"
     )
 
     if [[ "$pristine_mode" == "clean" ]]; then
@@ -1237,17 +1306,27 @@ run_build()
 
     args+=(
         -b "$board"
-        "$PROJECT_DIR"
+        "$APP_DIR"
     )
 
     # --------------------------------------------------------
     # Add BOARD_ROOT if custom boards exist
     # --------------------------------------------------------
 
-    if [[ -d "$PROJECT_DIR/boards" ]] &&
+    if [[ -d "$APP_DIR/boards" ]] &&
+       [[ -n "$(find "$APP_DIR/boards" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
+
+        info "Local boards/ content found in app."
+        info "BOARD_ROOT active."
+
+        args+=(
+            --
+            "-DBOARD_ROOT=$APP_DIR"
+        )
+    elif [[ -d "$PROJECT_DIR/boards" ]] &&
        [[ -n "$(find "$PROJECT_DIR/boards" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
 
-        info "Local boards/ content found."
+        info "Local boards/ content found in project."
         info "BOARD_ROOT active."
 
         args+=(
@@ -1259,7 +1338,8 @@ run_build()
     echo
     info "Board        : $board"
     info "Project        : $PROJECT_DIR"
-    info "Build directory: $PROJECT_DIR/$BUILD_DIR"
+    info "App Directory  : $APP_DIR"
+    info "Build directory: $APP_DIR/$BUILD_DIR"
     echo
 
     "${args[@]}"
@@ -1282,7 +1362,7 @@ run_flash()
 
     info "Flashing board..."
 
-    if west flash --build-dir "$PROJECT_DIR/$BUILD_DIR" -r openocd; then
+    if west flash --build-dir "$APP_DIR/$BUILD_DIR" -r openocd; then
         success "Flash completed."
     else
         warning "openocd failed. Trying pyocd instead..."
@@ -1302,7 +1382,7 @@ run_flash()
         fi
 
         info "Flashing with pyocd..."
-        if west flash --build-dir "$PROJECT_DIR/$BUILD_DIR" -r pyocd; then
+        if west flash --build-dir "$APP_DIR/$BUILD_DIR" -r pyocd; then
             success "Flash completed with pyocd."
         else
             error "Flash with pyocd also failed."
@@ -1327,7 +1407,7 @@ run_debug()
     info "To exit, type quit in GDB"
 
     west debug \
-        --build-dir "$PROJECT_DIR/$BUILD_DIR" \
+        --build-dir "$APP_DIR/$BUILD_DIR" \
         -r openocd
 }
 
@@ -1347,7 +1427,7 @@ run_debugserver()
     info "Ctrl+C to stop."
 
     west debugserver \
-        --build-dir "$PROJECT_DIR/$BUILD_DIR" \
+        --build-dir "$APP_DIR/$BUILD_DIR" \
         -r openocd
 }
 
@@ -1364,11 +1444,12 @@ show_status()
     echo
 
     echo "Project        : $PROJECT_DIR"
+    echo "App Directory  : $APP_DIR"
     echo "Workspace      : $ZEPHYR_WORKSPACE"
     echo "Applications   : $APPLICATIONS_DIR"
     echo "Venv           : $ZEPHYR_VENV"
     echo "Board          : $(get_board)"
-    echo "Build directory: $PROJECT_DIR/$BUILD_DIR"
+    echo "Build directory: $APP_DIR/$BUILD_DIR"
 
     echo
 
@@ -1630,7 +1711,8 @@ source ~/.zephyrproject-completion.bash
             exit 1
         fi
 
-        check_project
+        resolve_app_dir ""
+        check_app
 
         if command -v code >/dev/null 2>&1; then
 
@@ -1691,7 +1773,8 @@ source ~/.zephyrproject-completion.bash
 
     -status)
 
-        check_project
+        resolve_app_dir "${2:-}"
+        check_app
         activate_venv
         show_status
         ;;
@@ -1702,7 +1785,8 @@ source ~/.zephyrproject-completion.bash
 
     -build)
 
-        check_project
+        resolve_app_dir "${2:-}"
+        check_app
         activate_venv
 
         run_build normal
@@ -1714,7 +1798,8 @@ source ~/.zephyrproject-completion.bash
 
     -flash)
 
-        check_project
+        resolve_app_dir "${2:-}"
+        check_app
         activate_venv
 
         run_build normal
@@ -1727,7 +1812,8 @@ source ~/.zephyrproject-completion.bash
 
     -clean)
 
-        check_project
+        resolve_app_dir "${2:-}"
+        check_app
         activate_venv
 
         run_build clean
@@ -1739,7 +1825,8 @@ source ~/.zephyrproject-completion.bash
 
     -clean-flash)
 
-        check_project
+        resolve_app_dir "${2:-}"
+        check_app
         activate_venv
 
         run_build clean
@@ -1752,7 +1839,8 @@ source ~/.zephyrproject-completion.bash
 
     -flash-only)
 
-        check_project
+        resolve_app_dir "${2:-}"
+        check_app
         activate_venv
 
         run_flash
@@ -1764,7 +1852,8 @@ source ~/.zephyrproject-completion.bash
 
     -debug)
 
-        check_project
+        resolve_app_dir "${2:-}"
+        check_app
         activate_venv
 
         run_build normal
@@ -1777,7 +1866,8 @@ source ~/.zephyrproject-completion.bash
 
     -debugserver)
 
-        check_project
+        resolve_app_dir "${2:-}"
+        check_app
         activate_venv
 
         run_build normal
@@ -1790,7 +1880,8 @@ source ~/.zephyrproject-completion.bash
 
     -menuconfig)
 
-        check_project
+        resolve_app_dir "${2:-}"
+        check_app
         activate_venv
 
         if [[ -z "$(get_board)" ]]; then
@@ -1802,14 +1893,14 @@ source ~/.zephyrproject-completion.bash
         fi
 
         # Configure/build if build does not exist
-        if [[ ! -d "$PROJECT_DIR/$BUILD_DIR" ]]; then
+        if [[ ! -d "$APP_DIR/$BUILD_DIR" ]]; then
             run_build normal
         fi
 
         info "Opening menuconfig..."
 
         west build \
-            --build-dir "$PROJECT_DIR/$BUILD_DIR" \
+            --build-dir "$APP_DIR/$BUILD_DIR" \
             -t menuconfig
 
         ;;
@@ -1820,13 +1911,14 @@ source ~/.zephyrproject-completion.bash
 
     -pristine)
 
-        check_project
+        resolve_app_dir "${2:-}"
+        check_app
 
-        if [[ -d "$PROJECT_DIR/$BUILD_DIR" ]]; then
+        if [[ -d "$APP_DIR/$BUILD_DIR" ]]; then
 
             info "$PROJECT_DIR/$BUILD_DIR is being deleted..."
 
-            rm -rf -- "$PROJECT_DIR/$BUILD_DIR"
+            rm -rf -- "$APP_DIR/$BUILD_DIR"
 
             success "Build folder deleted."
 
